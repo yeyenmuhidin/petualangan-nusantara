@@ -2,7 +2,8 @@
    Three.js r170 is loaded from a local copy. No runtime CDN. */
 import * as THREE from './three.module.js';
 
-const SAVE_KEY = 'petualangan-nusantara-v1';
+const SAVE_KEY = 'petualangan-nusantara-v2';
+const SAVE_KEY_LEGACY = 'petualangan-nusantara-v1';
 const ISLAND_R = 36;
 const WALK_R = 33.5;
 const PLAYER_SPEED = 7.2;
@@ -12,7 +13,15 @@ const ITEM_NAMES = {
   keranjang: 'Keranjang Bu Sari',
   ikan: 'Ikan segar',
   harta: 'Harta karun pulau',
+  cangkul: 'Cangkul Pak Tani',
+  padi: 'Seikat padi',
+  bekal: 'Bekal untuk Mbah Karya',
+  genta: 'Genta kuno',
+  pusaka: 'Pusaka Nusantara',
 };
+const PUZZLE_ORDER = ['hijau', 'kuning', 'merah'];
+const SAWAH = { x: 0, z: -54, rx: 16, rz: 15 };
+const GUNUNG = { x: 24, z: -76, r: 13.8 };
 
 const mats = new Map();
 function mat(color, extra = {}) {
@@ -30,16 +39,74 @@ function mesh(geo, material, x = 0, y = 0, z = 0) {
   return m;
 }
 
+function distToSeg(px, pz, ax, az, bx, bz) {
+  const abx = bx - ax, abz = bz - az;
+  const len2 = abx * abx + abz * abz || 1;
+  let u = ((px - ax) * abx + (pz - az) * abz) / len2;
+  u = Math.max(0, Math.min(1, u));
+  return Math.hypot(px - (ax + abx * u), pz - (az + abz * u));
+}
+
+function isWalkable(x, z) {
+  if (x * x + z * z <= WALK_R * WALK_R) return true;
+  if (distToSeg(x, z, 0, -32.0, 0, -42.5) <= 1.4) return true;
+  const sx = (x - SAWAH.x) / SAWAH.rx;
+  const sz = (z - SAWAH.z) / SAWAH.rz;
+  if (sx * sx + sz * sz <= 1) return true;
+  if (distToSeg(x, z, 11, -60, 18.5, -70) <= 1.7) return true;
+  const gx = x - GUNUNG.x, gz = z - GUNUNG.z;
+  if (gx * gx + gz * gz <= GUNUNG.r * GUNUNG.r) return true;
+  return false;
+}
+
+function gunungHeight(x, z) {
+  const gx = x - GUNUNG.x, gz = z - GUNUNG.z;
+  const gd = Math.hypot(gx, gz);
+  if (gd >= GUNUNG.r) return 0;
+  const t = 1 - gd / GUNUNG.r;
+  return 0.12 + t * t * 3.7;
+}
+
+function groundHeight(x, z) {
+  const gh = gunungHeight(x, z);
+  if (gh > 0) return gh;
+  const dPath = distToSeg(x, z, 11, -60, 18.5, -70);
+  if (dPath < 2.2) {
+    const abx = 7.5, abz = -10;
+    const len2 = abx * abx + abz * abz;
+    let u = ((x - 11) * abx + (z + 60) * abz) / len2;
+    u = Math.max(0, Math.min(1, u));
+    const edge = gunungHeight(18.5, -70);
+    return u * Math.max(edge, 1.4);
+  }
+  return 0;
+}
+
+function applyGroundY(obj, extra = 0) {
+  obj.position.y = groundHeight(obj.position.x, obj.position.z) + extra;
+}
+
 function defaultSave() {
   return {
     coins: 0,
     collectedCoins: {},
     inventory: [],
-    quests: { kades: 'idle', sari: 'idle', udin: 'idle', gua: 'idle' },
+    quests: {
+      kades: 'idle', sari: 'idle', udin: 'idle', gua: 'idle',
+      tani: 'idle', rina: 'idle', prasasti: 'idle', roh: 'idle',
+    },
     defeatedSlimes: {},
     slimesDefeated: 0,
     basketTaken: false,
     treasureTaken: false,
+    hoeTaken: false,
+    bekalDelivered: false,
+    puzzleStep: 0,
+    puzzleDone: false,
+    defeatedRoh: {},
+    rohDefeated: 0,
+    pusakaTaken: false,
+    migratedFromV1: false,
     px: START.x,
     pz: START.z,
     rot: START.rot,
@@ -49,10 +116,21 @@ function defaultSave() {
 
 function loadSave() {
   try {
-    const raw = localStorage.getItem(SAVE_KEY);
+    let raw = localStorage.getItem(SAVE_KEY);
+    let migrated = false;
+    if (!raw) {
+      raw = localStorage.getItem(SAVE_KEY_LEGACY);
+      if (raw) migrated = true;
+    }
     if (!raw) return null;
     const data = JSON.parse(raw);
-    return { ...defaultSave(), ...data, quests: { ...defaultSave().quests, ...(data.quests || {}) } };
+    const merged = { ...defaultSave(), ...data, quests: { ...defaultSave().quests, ...(data.quests || {}) } };
+    if (migrated) {
+      if (merged.won) merged.won = false;
+      merged.migratedFromV1 = true;
+      writeSave(merged);
+    }
+    return merged;
   } catch (err) {
     return null;
   }
@@ -103,9 +181,13 @@ const world = {
   limbs: null,
   npcs: [],
   slimes: [],
+  rohs: [],
   coins: [],
   basket: null,
   chest: null,
+  hoe: null,
+  pusaka: null,
+  stones: [],
   warung: null,
   colliders: [],
   water: null,
@@ -143,8 +225,8 @@ function setupRenderer() {
   renderer.shadowMap.enabled = false;
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x7ec4d8);
-  scene.fog = new THREE.Fog(0x7ec4d8, 44, 98);
-  const camera = new THREE.PerspectiveCamera(52, 1, 0.2, 140);
+  scene.fog = new THREE.Fog(0x7ec4d8, 55, 150);
+  const camera = new THREE.PerspectiveCamera(52, 1, 0.2, 190);
   camera.position.set(0, 7, 10);
   world.renderer = renderer;
   world.scene = scene;
@@ -208,6 +290,12 @@ function makePerson({ shirt, pants, skin, hair, hat = null }) {
     g.add(mesh(new THREE.BoxGeometry(0.18, 0.16, 0.18), hair, 0, 1.84, -0.04));
   } else if (hat === 'band') {
     g.add(mesh(new THREE.BoxGeometry(0.42, 0.08, 0.42), 0x9a3412, 0, 1.64, 0));
+  } else if (hat === 'caping') {
+    const caping = mesh(new THREE.ConeGeometry(0.42, 0.4, 8), 0xe8d48a, 0, 1.9, 0);
+    g.add(caping);
+  } else if (hat === 'udeng') {
+    g.add(mesh(new THREE.BoxGeometry(0.44, 0.12, 0.44), 0xf5f0e6, 0, 1.7, 0));
+    g.add(mesh(new THREE.BoxGeometry(0.18, 0.16, 0.2), 0xf5f0e6, 0, 1.84, 0.1));
   }
 
   g.userData.limbs = { armL, armR, legL, legR };
@@ -314,7 +402,7 @@ function biomeColor(x, z, target) {
     return target;
   }
   // village grass + dirt path near center
-  const path = (Math.abs(x) < 1.05 && z > -12 && z < 11) ||
+  const path = (Math.abs(x) < 1.05 && z > -34 && z < 11) ||
     (Math.abs(z + 6.2) < 0.95 && x > -7 && x < 6.5);
   if (path) {
     target.set(0x8b6b3e);
@@ -354,7 +442,7 @@ function buildIsland() {
   const island = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true }));
   world.scene.add(island);
 
-  const water = mesh(new THREE.CircleGeometry(110, 40), mat(0x1a6f8a), 0, -0.42, 0);
+  const water = mesh(new THREE.CircleGeometry(170, 48), mat(0x1a6f8a), 4, -0.42, -30);
   water.rotation.x = -Math.PI / 2;
   world.scene.add(water);
   world.water = water;
@@ -400,6 +488,7 @@ function buildTrees() {
     if (x < -12 && z > -6 && z < 16) return;
     if (z > 8) return;
     if (z > 4 && x < 11) return;
+    if (z < -22 && Math.abs(x) < 4.5) return;
     if (palmy) return;
     trunks.push({ x, z, y: 0.7 * s, s, ry: seeded(i + 3) * Math.PI });
     leaves.push({ x, z, y: 1.7 * s, s, ry: seeded(i + 4) * Math.PI });
@@ -568,6 +657,367 @@ function buildCave() {
   addCollider(-29.3, 6, 1.15);
 }
 
+function buildBridge() {
+  const g = new THREE.Group();
+  const z1 = -32.4, z2 = -42.2;
+  const len = Math.abs(z2 - z1);
+  const midZ = (z1 + z2) / 2;
+  g.add(mesh(new THREE.BoxGeometry(2.15, 0.14, len + 0.3), 0x8b5a2b, 0, 0.16, 0));
+  for (let i = 0; i <= 8; i++) {
+    const zz = -len / 2 + (i / 8) * len;
+    g.add(mesh(new THREE.BoxGeometry(0.12, 0.85, 0.12), 0x6b4a28, -1.05, 0.5, zz));
+    g.add(mesh(new THREE.BoxGeometry(0.12, 0.85, 0.12), 0x6b4a28, 1.05, 0.5, zz));
+  }
+  g.add(mesh(new THREE.BoxGeometry(0.1, 0.1, len + 0.2), 0x6b4a28, -1.05, 0.9, 0));
+  g.add(mesh(new THREE.BoxGeometry(0.1, 0.1, len + 0.2), 0x6b4a28, 1.05, 0.9, 0));
+  g.position.set(0, 0, midZ);
+  world.scene.add(g);
+}
+
+function buildSawah() {
+  const geo = new THREE.PlaneGeometry(38, 34, 38, 34);
+  geo.rotateX(-Math.PI / 2);
+  const pos = geo.attributes.position;
+  const colors = new Float32Array(pos.count * 3);
+  const c = new THREE.Color();
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i) + SAWAH.x;
+    const z = pos.getZ(i) + SAWAH.z;
+    const sx = (x - SAWAH.x) / (SAWAH.rx + 1.2);
+    const sz = (z - SAWAH.z) / (SAWAH.rz + 1.2);
+    const e = sx * sx + sz * sz;
+    let y = 0.02;
+    if (e > 1) {
+      y = -0.62;
+      c.set(0x1a6f8a);
+    } else if (e > 0.82) {
+      y = 0.02;
+      c.set(0xdcc57a);
+    } else {
+      const col = Math.round((x + 12) / 5);
+      const row = Math.round((z + 66) / 4.2);
+      const dike = Math.abs((x + 12) - col * 5) < 0.45 || Math.abs((z + 66) - row * 4.2) < 0.38;
+      if (dike) {
+        y = 0.1;
+        c.set(0x8a6a3b);
+      } else {
+        y = -0.02;
+        c.set((col + row) % 2 === 0 ? 0x5fa85a : 0x4f9a4e);
+        if ((col + row) % 3 === 0) c.set(0x3d8f62);
+      }
+    }
+    pos.setY(i, y);
+    colors[i * 3] = c.r;
+    colors[i * 3 + 1] = c.g;
+    colors[i * 3 + 2] = c.b;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  geo.computeVertexNormals();
+  const ground = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true }));
+  ground.position.set(SAWAH.x, 0, SAWAH.z);
+  world.scene.add(ground);
+
+  const ring = mesh(new THREE.RingGeometry(15.2, 18.2, 48), mat(0x3aa0b5), SAWAH.x, -0.28, SAWAH.z);
+  ring.rotation.x = -Math.PI / 2;
+  world.scene.add(ring);
+
+  buildBridge();
+
+  const stalks = [];
+  for (let k = 0; k < 90; k++) {
+    const x = -13 + seeded(k + 200) * 26;
+    const z = -66 + seeded(k + 260) * 24;
+    const sx = (x - SAWAH.x) / SAWAH.rx;
+    const sz = (z - SAWAH.z) / SAWAH.rz;
+    if (sx * sx + sz * sz > 0.72) continue;
+    if (Math.abs(x) < 1.4 && z > -46) continue;
+    stalks.push({
+      x, z, y: 0.32, s: 0.7 + seeded(k + 9) * 0.5,
+      ry: seeded(k) * Math.PI, sy: 0.9 + seeded(k + 3) * 0.5,
+    });
+  }
+  if (stalks.length) {
+    placeInstanced(new THREE.ConeGeometry(0.12, 0.7, 5), mat(0xc5dc6a), stalks, (p) => p.y * (p.sy || 1));
+  }
+
+  // farmer hut
+  makeHouse(7.6, -45.6, -0.3, 0xf3e2c4, 0xc4a35a, 2.6, 2.2, 1.7);
+
+  // scarecrow
+  const sc = new THREE.Group();
+  sc.add(mesh(new THREE.CylinderGeometry(0.06, 0.07, 1.7, 6), 0x6b4a28, 0, 0.85, 0));
+  sc.add(mesh(new THREE.BoxGeometry(1.15, 0.1, 0.1), 0x6b4a28, 0, 1.35, 0));
+  sc.add(mesh(new THREE.BoxGeometry(0.45, 0.4, 0.25), 0xb45309, 0, 1.2, 0));
+  sc.add(mesh(new THREE.BoxGeometry(0.28, 0.28, 0.28), 0xe8d48a, 0, 1.62, 0));
+  sc.add(mesh(new THREE.ConeGeometry(0.28, 0.22, 7), 0xd6b15a, 0, 1.84, 0));
+  sc.position.set(-9.2, 0, -59.4);
+  world.scene.add(sc);
+  addCollider(-9.2, -59.4, 0.5);
+
+  makeSign('SAWAH', 0, -40.6, 0);
+  makeSign('GUNUNG', 10.6, -59.2, Math.PI * 0.7);
+  makeSign('JEMBATAN', 0, -29.4, 0);
+}
+
+function makeHoe() {
+  const g = new THREE.Group();
+  g.add(mesh(new THREE.CylinderGeometry(0.035, 0.04, 1.05, 6), 0x6b4a28, 0, 0.55, 0));
+  const blade = mesh(new THREE.BoxGeometry(0.38, 0.06, 0.22), 0x64748b, 0.08, 0.08, 0);
+  blade.rotation.z = 0.3;
+  g.add(blade);
+  return g;
+}
+
+function makeRoh(color) {
+  const g = new THREE.Group();
+  const body = mesh(new THREE.BoxGeometry(0.7, 0.62, 0.62), color);
+  body.position.y = 0.45;
+  g.add(body);
+  g.add(mesh(new THREE.BoxGeometry(0.12, 0.12, 0.08), 0xfde68a, -0.16, 0.55, 0.3));
+  g.add(mesh(new THREE.BoxGeometry(0.12, 0.12, 0.08), 0xfde68a, 0.16, 0.55, 0.3));
+  g.userData.body = body;
+  return g;
+}
+
+function makePusaka() {
+  const g = new THREE.Group();
+  g.add(mesh(new THREE.BoxGeometry(0.42, 0.16, 0.42), 0xb45309, 0, 0.1, 0));
+  g.add(mesh(new THREE.CylinderGeometry(0.08, 0.1, 0.7, 8), 0xe8b84a, 0, 0.5, 0));
+  g.add(mesh(new THREE.SphereGeometry(0.16, 8, 6), 0xf5d76e, 0, 0.92, 0));
+  g.add(mesh(new THREE.BoxGeometry(0.36, 0.06, 0.06), 0xf5d76e, 0, 0.92, 0));
+  g.add(mesh(new THREE.BoxGeometry(0.06, 0.06, 0.36), 0xf5d76e, 0, 0.92, 0));
+  return g;
+}
+
+function buildStonePath() {
+  const slabs = [];
+  for (let i = 0; i <= 12; i++) {
+    const u = i / 12;
+    const x = 11 + (18.5 - 11) * u;
+    const z = -60 + (-70 + 60) * u;
+    const y = groundHeight(x, z) + 0.05;
+    slabs.push({ x, z, y, s: 1, ry: Math.atan2(18.5 - 11, -70 + 60) + (seeded(i + 4) - 0.5) * 0.2, sx: 1.1, sy: 0.18, sz: 0.85 });
+  }
+  placeInstanced(new THREE.BoxGeometry(1.3, 0.12, 1.0), mat(0x7c756c), slabs, (p) => p.y);
+}
+
+function buildGunung() {
+  const geo = new THREE.CircleGeometry(GUNUNG.r + 1.6, 48);
+  geo.rotateX(-Math.PI / 2);
+  const pos = geo.attributes.position;
+  const colors = new Float32Array(pos.count * 3);
+  const c = new THREE.Color();
+  for (let i = 0; i < pos.count; i++) {
+    const lx = pos.getX(i);
+    const lz = pos.getZ(i);
+    const x = lx + GUNUNG.x;
+    const z = lz + GUNUNG.z;
+    const r = Math.hypot(lx, lz);
+    let y = gunungHeight(x, z);
+    if (r > GUNUNG.r + 0.2) {
+      y = -0.62;
+      c.set(0x1a6f8a);
+    } else if (r > GUNUNG.r - 1.6) {
+      c.set(0x8a8378);
+    } else {
+      c.set(0x6f7a68).lerp(new THREE.Color(0x9aa084), y / 4);
+    }
+    pos.setY(i, y);
+    colors[i * 3] = c.r;
+    colors[i * 3 + 1] = c.g;
+    colors[i * 3 + 2] = c.b;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  geo.computeVertexNormals();
+  const ground = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true }));
+  ground.position.set(GUNUNG.x, 0, GUNUNG.z);
+  world.scene.add(ground);
+
+  buildStonePath();
+
+  const rocks = [];
+  for (let k = 0; k < 18; k++) {
+    const ang = seeded(k + 400) * Math.PI * 2;
+    const rad = 6 + seeded(k + 410) * 7;
+    const x = GUNUNG.x + Math.cos(ang) * rad;
+    const z = GUNUNG.z + Math.sin(ang) * rad;
+    if (Math.hypot(x - 26, z + 80) < 4) continue;
+    const s = 0.45 + seeded(k + 420) * 0.8;
+    rocks.push({
+      x, z, y: groundHeight(x, z) + 0.22 * s,
+      s, ry: seeded(k) * Math.PI,
+      sx: 0.8 + seeded(k + 1) * 0.5, sy: 0.5 + seeded(k + 2) * 0.7, sz: 0.8 + seeded(k + 3) * 0.5,
+    });
+  }
+  if (rocks.length) {
+    placeInstanced(new THREE.BoxGeometry(1, 0.8, 1), mat(0x6f6b72), rocks, (p) => p.y);
+  }
+
+  // candi bentar (split gate)
+  const gateY = groundHeight(19.6, -70.6);
+  const gate = new THREE.Group();
+  const pillar = (sx) => {
+    const p = new THREE.Group();
+    p.add(mesh(new THREE.BoxGeometry(0.7, 3.2, 0.7), 0xc4b5a0, sx, 1.6, 0));
+    p.add(mesh(new THREE.BoxGeometry(0.95, 0.28, 0.95), 0xb45309, sx, 3.25, 0));
+    p.add(mesh(new THREE.BoxGeometry(0.5, 0.5, 0.5), 0xc4b5a0, sx, 3.55, 0));
+    return p;
+  };
+  gate.add(pillar(-1.35), pillar(1.35));
+  gate.position.set(19.6, gateY, -70.6);
+  gate.rotation.y = 0.7;
+  world.scene.add(gate);
+  addCollider(19.6 - Math.cos(0.7) * 1.35, -70.6 - Math.sin(0.7) * 1.35, 0.55);
+  addCollider(19.6 + Math.cos(0.7) * 1.35, -70.6 + Math.sin(0.7) * 1.35, 0.55);
+
+  // temple ruin (candi)
+  const tx = 26, tz = -80.2;
+  const ty = groundHeight(tx, tz);
+  const candi = new THREE.Group();
+  candi.add(mesh(new THREE.BoxGeometry(6.2, 0.55, 6.2), 0xc4b5a0, 0, 0.28, 0));
+  candi.add(mesh(new THREE.BoxGeometry(4.6, 0.5, 4.6), 0xb9aa95, 0, 0.75, 0));
+  candi.add(mesh(new THREE.BoxGeometry(3.2, 0.48, 3.2), 0xc4b5a0, 0, 1.2, 0));
+  candi.add(mesh(new THREE.BoxGeometry(2.0, 1.3, 2.0), 0xb7a68e, 0, 2.05, 0));
+  candi.add(mesh(new THREE.CylinderGeometry(0.55, 0.85, 0.7, 8), 0xd6c4a3, 0, 2.85, 0));
+  candi.add(mesh(new THREE.ConeGeometry(0.7, 0.9, 8), 0xe8b84a, 0, 3.5, 0));
+  // broken corner pillars
+  candi.add(mesh(new THREE.BoxGeometry(0.4, 1.6, 0.4), 0xb9aa95, 2.5, 1.1, 2.5));
+  candi.add(mesh(new THREE.BoxGeometry(0.4, 0.8, 0.4), 0xb9aa95, -2.5, 0.7, 2.5));
+  candi.add(mesh(new THREE.BoxGeometry(0.4, 1.3, 0.4), 0xb9aa95, 2.5, 0.95, -2.5));
+  candi.add(mesh(new THREE.BoxGeometry(0.4, 1.1, 0.4), 0xb9aa95, -2.5, 0.85, -2.5));
+  candi.position.set(tx, ty, tz);
+  world.scene.add(candi);
+  addCollider(tx, tz, 2.2);
+
+  // altar on the east side of the temple, reachable around the base
+  const ax = 29.6, az = -80.6;
+  const ay = groundHeight(ax, az);
+  const altar = new THREE.Group();
+  altar.add(mesh(new THREE.BoxGeometry(1.5, 0.35, 1.1), 0x8a7a66, 0, 0.18, 0));
+  altar.add(mesh(new THREE.BoxGeometry(1.2, 0.12, 0.85), 0xc4b5a0, 0, 0.38, 0));
+  altar.position.set(ax, ay, az);
+  world.scene.add(altar);
+  addCollider(ax, az, 0.7);
+
+  // prasasti tablet
+  const px = 23.3, pz = -74.8;
+  const py = groundHeight(px, pz);
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 320;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#b9aa95';
+  ctx.fillRect(0, 0, 256, 320);
+  ctx.strokeStyle = '#5c4a32';
+  ctx.lineWidth = 10;
+  ctx.strokeRect(6, 6, 244, 308);
+  ctx.fillStyle = '#3b2a1a';
+  ctx.textAlign = 'center';
+  ctx.font = 'bold 28px sans-serif';
+  ctx.fillText('PRASASTI', 128, 52);
+  ctx.font = 'bold 24px sans-serif';
+  ctx.fillText('Urutan batu:', 128, 110);
+  ctx.fillStyle = '#15803d';
+  ctx.fillText('1. HIJAU', 128, 165);
+  ctx.fillStyle = '#a16207';
+  ctx.fillText('2. KUNING', 128, 215);
+  ctx.fillStyle = '#b91c1c';
+  ctx.fillText('3. MERAH', 128, 265);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.minFilter = THREE.LinearFilter;
+  const tab = new THREE.Group();
+  tab.add(mesh(new THREE.BoxGeometry(0.16, 1.1, 0.16), 0x6b4a28, 0, 0.55, 0));
+  tab.add(mesh(new THREE.BoxGeometry(0.9, 1.15, 0.08), 0xb9aa95, 0, 1.4, 0));
+  const face = mesh(new THREE.PlaneGeometry(0.82, 1.05), new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide }), 0, 1.4, 0.05);
+  tab.add(face);
+  tab.position.set(px, py, pz);
+  tab.rotation.y = 0.3;
+  world.scene.add(tab);
+
+  makeSign('GUNUNG', 16.2, -67.5, 0.6);
+}
+
+function spawnHoe() {
+  const h = makeHoe();
+  h.position.set(-12.5, 0, -61.2);
+  applyGroundY(h, 0);
+  h.userData.kind = 'hoe';
+  if (save.hoeTaken) h.visible = false;
+  world.scene.add(h);
+  world.hoe = h;
+}
+
+function spawnPusaka() {
+  const g = makePusaka();
+  g.position.set(29.6, 0, -80.6);
+  applyGroundY(g, 0.42);
+  g.userData.kind = 'pusaka';
+  if (save.pusakaTaken) g.visible = false;
+  world.scene.add(g);
+  world.pusaka = g;
+}
+
+function spawnPuzzleStones() {
+  const specs = [
+    { id: 'hijau', color: 0x22c55e, x: 24.2, z: -73.0 },
+    { id: 'kuning', color: 0xeab308, x: 27.3, z: -75.0 },
+    { id: 'merah', color: 0xdc2626, x: 21.0, z: -75.2 },
+  ];
+  world.stones = specs.map((s) => {
+    const g = new THREE.Group();
+    const ped = mesh(new THREE.CylinderGeometry(0.32, 0.38, 0.28, 8), 0x7c756c);
+    const lit = new THREE.MeshLambertMaterial({ color: s.color, emissive: 0x000000, emissiveIntensity: 0 });
+    const orb = new THREE.Mesh(new THREE.SphereGeometry(0.32, 10, 8), lit);
+    orb.position.y = 0.55;
+    g.add(ped, orb);
+    g.position.set(s.x, 0, s.z);
+    applyGroundY(g, 0);
+    g.userData.id = s.id;
+    g.userData.kind = 'stone';
+    g.userData.orb = orb;
+    g.userData.lit = lit;
+    world.scene.add(g);
+    addCollider(s.x, s.z, 0.4);
+    return g;
+  });
+  applyPuzzleVisual();
+}
+
+function applyPuzzleVisual() {
+  const step = save.puzzleDone ? PUZZLE_ORDER.length : (save.puzzleStep || 0);
+  for (const g of world.stones) {
+    const on = save.puzzleDone || PUZZLE_ORDER.slice(0, step).includes(g.userData.id);
+    g.userData.lit.emissive.setHex(on ? 0xffffff : 0x000000);
+    g.userData.lit.emissiveIntensity = on ? 0.45 : 0;
+  }
+}
+
+const ROH_SPOTS = [
+  [22.2, -78.4],
+  [28.4, -77.2],
+  [23.5, -82.6],
+  [28.8, -81.5],
+];
+
+function spawnRohs() {
+  const colors = [0x57534e, 0x78716c, 0x44403c, 0x6b6560];
+  world.rohs = ROH_SPOTS.map(([x, z], i) => {
+    const r = makeRoh(colors[i]);
+    r.position.set(x, 0, z);
+    applyGroundY(r, 0);
+    r.userData.id = 'r' + i;
+    r.userData.homeX = x;
+    r.userData.homeZ = z;
+    r.userData.angle = seeded(i + 9) * Math.PI * 2;
+    r.userData.phase = i * 1.1;
+    r.userData.alive = !save.defeatedRoh['r' + i];
+    r.visible = r.userData.alive;
+    world.scene.add(r);
+    return r;
+  });
+}
+
 function buildLights() {
   const hemi = new THREE.HemisphereLight(0xc9e8f5, 0x7a5a28, 0.95);
   world.scene.add(hemi);
@@ -619,10 +1069,34 @@ function spawnNpcs() {
       x: -17.2, z: 6.0, rot: Math.PI / 2,
       look: { shirt: 0x57534e, pants: 0x292524, skin: 0xc9956b, hair: 0x1c1410, hat: 'band' },
     },
+    {
+      id: 'tani',
+      name: 'Pak Tani',
+      x: -3.5, z: -49.2, rot: 0.5,
+      look: { shirt: 0x7c3f14, pants: 0x365314, skin: 0xc9956b, hair: 0x4b3b2a, hat: 'caping' },
+    },
+    {
+      id: 'rina',
+      name: 'Mbak Rina',
+      x: 5.4, z: -48.4, rot: -0.7,
+      look: { shirt: 0xea580c, pants: 0x9a3412, skin: 0xe0ac69, hair: 0x1c1410, hat: 'bun' },
+    },
+    {
+      id: 'karya',
+      name: 'Mbah Karya',
+      x: 21.2, z: -75.6, rot: -0.4,
+      look: { shirt: 0xf5f0e6, pants: 0x57534e, skin: 0xc9956b, hair: 0x9ca3af, hat: 'udeng' },
+    },
+    {
+      id: 'andi',
+      name: 'Kak Andi',
+      x: 17.4, z: -68.8, rot: 0.8,
+      look: { shirt: 0x0f766e, pants: 0x1e3a5f, skin: 0xb8874e, hair: 0x1c1410, hat: 'cap' },
+    },
   ];
   world.npcs = list.map((spec) => {
     const p = makePerson(spec.look);
-    p.position.set(spec.x, 0, spec.z);
+    p.position.set(spec.x, groundHeight(spec.x, spec.z), spec.z);
     p.rotation.y = spec.rot;
     p.userData.id = spec.id;
     p.userData.name = spec.name;
@@ -638,6 +1112,8 @@ const COIN_SPOTS = [
   [16, -10], [21, -15], [24, -6], [14, -20],
   [8, 14], [-4, 16], [12, 20], [-10, 18], [0, 23],
   [-18, 10], [-20, 1], [-13, -2], [6, 6], [-6, 8],
+  [-6, -52], [4, -57], [-11, -56], [8, -50],
+  [20, -73], [28, -76], [22, -81],
 ];
 
 function spawnCoins() {
@@ -646,7 +1122,7 @@ function spawnCoins() {
     const c = mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.06, 10), mat(0xe8b84a));
     c.rotation.x = Math.PI / 2;
     g.add(c);
-    g.position.set(x, 0.55, z);
+    g.position.set(x, groundHeight(x, z) + 0.55, z);
     g.userData.id = 'c' + i;
     g.userData.phase = i * 0.7;
     if (save.collectedCoins[g.userData.id]) g.visible = false;
@@ -707,12 +1183,18 @@ function buildWorld() {
   buildVillage();
   buildBeach();
   buildCave();
+  buildSawah();
+  buildGunung();
   spawnPlayer();
   spawnNpcs();
   spawnCoins();
   spawnBasket();
   spawnChest();
   spawnSlimes();
+  spawnHoe();
+  spawnPuzzleStones();
+  spawnRohs();
+  spawnPusaka();
 }
 
 /* -------------------- save / ui -------------------- */
@@ -735,6 +1217,19 @@ function refreshHud() {
   if (save.quests.gua === 'active') {
     if (save.slimesDefeated < 5) lines.push('Kalahkan slime (' + save.slimesDefeated + '/5)');
     else if (!save.treasureTaken) lines.push('Ambil harta karun di dalam gua');
+  }
+  if (save.quests.tani === 'active') {
+    lines.push(save.hoeTaken ? 'Kembalikan cangkul ke Pak Tani' : 'Temukan cangkul di pojok sawah');
+  }
+  if (save.quests.rina === 'active') {
+    lines.push(save.bekalDelivered ? 'Kembali ke Mbak Rina' : 'Antar bekal ke Mbah Karya di gunung');
+  }
+  if (save.quests.prasasti === 'active') {
+    lines.push(save.puzzleDone ? 'Bicara lagi dengan Mbah Karya' : 'Sentuh batu: hijau, kuning, merah');
+  }
+  if (save.quests.roh === 'active') {
+    if (save.rohDefeated < 4) lines.push('Kalahkan roh batu (' + save.rohDefeated + '/4)');
+    else if (!save.pusakaTaken) lines.push('Ambil Pusaka Nusantara di altar');
   }
   if (!lines.length) {
     ui.missions.innerHTML = '<p>Bicara dengan warga untuk menerima misi.</p>';
@@ -772,9 +1267,11 @@ function setPrompt(text) {
 }
 
 function areaAt(x, z) {
-  if (x < -14) return 'Gua';
+  if (z < -66 || (x > 13 && z < -62)) return 'Gunung';
+  if (z < -38) return 'Sawah';
+  if (x < -14 && z > -10 && z < 16) return 'Gua';
   if (z > 11) return 'Pantai';
-  if (x > 10 && z < 9) return 'Hutan';
+  if (x > 10 && z < 9 && z > -28) return 'Hutan';
   return 'Desa';
 }
 
@@ -815,6 +1312,10 @@ function talkTo(npc) {
   else if (id === 'sari') talkSari();
   else if (id === 'udin') talkUdin();
   else if (id === 'penjaga') talkPenjaga();
+  else if (id === 'tani') talkTani();
+  else if (id === 'rina') talkRina();
+  else if (id === 'karya') talkKarya();
+  else if (id === 'andi') talkAndi();
 }
 
 function talkKades() {
@@ -833,7 +1334,7 @@ function talkKades() {
       { label: 'Sama-sama', primary: true, fn: () => { persist({ quests: { ...save.quests, kades: 'done' } }); showToast('Misi Pak Kades selesai.'); closeDialog(); maybeWin(); } },
     ]);
   } else {
-    openDialog('Pak Kades', 'Terima kasih sudah membantu desa. Jelajahi hutan di timur, pantai di selatan, dan gua di barat ya.', [
+    openDialog('Pak Kades', 'Terima kasih sudah membantu desa. Ada jembatan baru ke utara, menuju sawah dan gunung. Hutan di timur, pantai di selatan, dan gua di barat juga menanti.', [
       { label: 'Baik, Pak', primary: true, fn: closeDialog },
     ]);
   }
@@ -922,6 +1423,127 @@ function talkPenjaga() {
   }
 }
 
+function talkTani() {
+  const q = save.quests.tani;
+  if (q === 'idle') {
+    openDialog('Pak Tani', 'Wah, ada tamu di sawah. Cangkulku tertinggal di pojok barat, dekat orang-orangan sawah. Tolong ambilkan, nak?', [
+      { label: 'Saya ambilkan', primary: true, fn: () => { persist({ quests: { ...save.quests, tani: 'active' } }); showToast('Misi baru: temukan cangkul di pojok sawah.'); closeDialog(); } },
+      { label: 'Nanti saja', fn: closeDialog },
+    ]);
+  } else if (q === 'active' && !save.hoeTaken) {
+    openDialog('Pak Tani', 'Cangkulnya di ujung barat sawah, dekat orang-orangan. Kalau sudah ketemu, bawa ke sini ya.', [
+      { label: 'Baik, Pak', primary: true, fn: closeDialog },
+    ]);
+  } else if (q === 'active' && save.hoeTaken) {
+    openDialog('Pak Tani', 'Ini dia cangkulku! Terima kasih banyak. Ini seikat padi untukmu, sebagai tanda terima kasih.', [
+      { label: 'Terima kasih, Pak', primary: true, fn: () => {
+        let inv = save.inventory.filter((x) => x !== 'cangkul');
+        if (!inv.includes('padi')) inv = [...inv, 'padi'];
+        persist({ inventory: inv, quests: { ...save.quests, tani: 'done' } });
+        showToast('Misi Pak Tani selesai. Kau mendapat seikat padi.');
+        closeDialog();
+        maybeWin();
+      } },
+    ]);
+  } else {
+    openDialog('Pak Tani', 'Padi tahun ini subur berkat bantuanmu. Kalau ke gunung, ikuti jalan batu ke timur laut, dan hati-hati di jalur menanjak ya.', [
+      { label: 'Baik, Pak', primary: true, fn: closeDialog },
+    ]);
+  }
+}
+
+function talkRina() {
+  const q = save.quests.rina;
+  if (q === 'idle') {
+    openDialog('Mbak Rina', 'Mbah Karya di kuil gunung belum makan sejak pagi. Tolong antarkan bekal ini ke beliau, ya? Ikuti jalan batu ke arah gunung.', [
+      { label: 'Saya antar', primary: true, fn: () => {
+        const inv = save.inventory.includes('bekal') ? save.inventory : [...save.inventory, 'bekal'];
+        persist({ inventory: inv, quests: { ...save.quests, rina: 'active' } });
+        showToast('Bekal masuk ke tas. Antarkan ke Mbah Karya di gunung.');
+        closeDialog();
+      } },
+      { label: 'Nanti saja', fn: closeDialog },
+    ]);
+  } else if (q === 'active' && !save.bekalDelivered) {
+    openDialog('Mbak Rina', 'Kuilnya di puncak gunung, di balik gapura batu. Mbah Karya biasanya menunggu di pelataran.', [
+      { label: 'Menuju gunung', primary: true, fn: closeDialog },
+    ]);
+  } else if (q === 'active' && save.bekalDelivered) {
+    openDialog('Mbak Rina', 'Bekalnya sudah sampai? Syukurlah. Terima kasih banyak, kau baik sekali.', [
+      { label: 'Sama-sama, Mbak', primary: true, fn: () => {
+        persist({ quests: { ...save.quests, rina: 'done' } });
+        showToast('Misi Mbak Rina selesai.');
+        closeDialog();
+        maybeWin();
+      } },
+    ]);
+  } else {
+    openDialog('Mbak Rina', 'Mbah Karya pasti senang. Kalau ke kuil lagi, perhatikan prasasti di pelataran ya.', [
+      { label: 'Baik', primary: true, fn: closeDialog },
+    ]);
+  }
+}
+
+function talkKarya() {
+  const q = save.quests.prasasti;
+  if (save.quests.rina === 'active' && save.inventory.includes('bekal') && !save.bekalDelivered) {
+    openDialog('Mbah Karya', 'Wah, bekal dari Mbak Rina? Terima kasih, nak. Perutku sudah keroncongan sejak pagi. Kau boleh sampaikan kabar ini ke Rina, atau bantu kuil ini lebih dulu.', [
+      { label: 'Sama-sama, Mbah', primary: true, fn: () => {
+        persist({ inventory: save.inventory.filter((x) => x !== 'bekal'), bekalDelivered: true });
+        showToast('Bekal disampaikan ke Mbah Karya.');
+        closeDialog();
+      } },
+    ]);
+    return;
+  }
+  if (q === 'idle') {
+    openDialog('Mbah Karya', 'Prasasti kuil meredup. Sentuh tiga batu di pelataran sesuai urutan yang tertulis: hijau, kuning, lalu merah. Kalau salah, mulai lagi dari awal.', [
+      { label: 'Saya coba', primary: true, fn: () => { persist({ quests: { ...save.quests, prasasti: 'active' }, puzzleStep: 0 }); showToast('Misi baru: sentuh batu hijau, kuning, lalu merah.'); closeDialog(); } },
+      { label: 'Nanti saja', fn: closeDialog },
+    ]);
+  } else if (q === 'active' && !save.puzzleDone) {
+    openDialog('Mbah Karya', 'Urutannya tertulis di prasasti: hijau, kuning, lalu merah. Sentuh batu itu dengan tombol Aksi. Sekarang langkah ke-' + (save.puzzleStep + 1) + '.', [
+      { label: 'Baik, Mbah', primary: true, fn: closeDialog },
+    ]);
+  } else if (q === 'active' && save.puzzleDone) {
+    openDialog('Mbah Karya', 'Genta kuno kembali berbunyi. Terimalah genta ini sebagai tanda. Tapi roh pelindung di sekitar altar masih gelisah. Sapa Kak Andi di gapura ya.', [
+      { label: 'Terima kasih, Mbah', primary: true, fn: () => {
+        const inv = save.inventory.includes('genta') ? save.inventory : [...save.inventory, 'genta'];
+        persist({ inventory: inv, quests: { ...save.quests, prasasti: 'done' } });
+        showToast('Misi prasasti selesai. Kau mendapat genta kuno.');
+        closeDialog();
+        maybeWin();
+      } },
+    ]);
+  } else {
+    openDialog('Mbah Karya', 'Kuil ini tenang berkat bantuanmu. Jagalah pusaka pulau dengan hati yang jernih, nak.', [
+      { label: 'Baik, Mbah', primary: true, fn: closeDialog },
+    ]);
+  }
+}
+
+function talkAndi() {
+  const q = save.quests.roh;
+  if (q === 'idle') {
+    openDialog('Kak Andi', 'Empat roh batu menjaga altar di samping kuil. Mereka tidak berbahaya, cukup kalahkan dengan tombol Aksi saat kau dekat, lalu ambil Pusaka Nusantara di altar.', [
+      { label: 'Saya siapkan', primary: true, fn: () => { persist({ quests: { ...save.quests, roh: 'active' } }); showToast('Misi baru: kalahkan 4 roh batu, lalu ambil pusaka.'); closeDialog(); } },
+      { label: 'Nanti saja', fn: closeDialog },
+    ]);
+  } else if (q === 'active' && save.rohDefeated < 4) {
+    openDialog('Kak Andi', 'Roh batu masih berkeliaran di pelataran dan belakang kuil. Kalahkan dengan tombol Aksi. Sekarang ' + save.rohDefeated + ' dari 4.', [
+      { label: 'Baik', primary: true, fn: closeDialog },
+    ]);
+  } else if (q === 'active' && !save.pusakaTaken) {
+    openDialog('Kak Andi', 'Rohnya sudah tenang. Pergi ke altar di samping kuil dan ambil Pusaka Nusantara.', [
+      { label: 'Menuju altar', primary: true, fn: closeDialog },
+    ]);
+  } else {
+    openDialog('Kak Andi', 'Pusaka Nusantara ada di tanganmu. Kau penjaga yang layak. Pulau ini lebih aman sekarang.', [
+      { label: 'Terima kasih', primary: true, fn: closeDialog },
+    ]);
+  }
+}
+
 function useWarung() {
   if (save.quests.udin === 'active' && save.inventory.includes('ikan')) {
     openDialog('Warung Desa', 'Kau mengantar ikan dari Nelayan Udin. Ikan segar ini akan segera dimasak untuk warga desa. Terima kasih!', [
@@ -961,7 +1583,10 @@ function tryTakeTreasure() {
 }
 
 function allQuestsDone() {
-  return save.quests.kades === 'done' && save.quests.sari === 'done' && save.quests.udin === 'done' && save.quests.gua === 'done' && save.treasureTaken;
+  const q = save.quests;
+  return q.kades === 'done' && q.sari === 'done' && q.udin === 'done' && q.gua === 'done'
+    && q.tani === 'done' && q.rina === 'done' && q.prasasti === 'done' && q.roh === 'done'
+    && save.treasureTaken && save.pusakaTaken;
 }
 
 function maybeWin() {
@@ -1008,6 +1633,13 @@ function pickupNearby() {
     if (save.quests.sari === 'active') showToast('Keranjang ditemukan. Kembalikan ke Bu Sari.');
     else showToast('Keranjang ditemukan. Bawa ke Bu Sari di desa.');
   }
+  if (world.hoe && world.hoe.visible && dist2(p.x, p.z, world.hoe.position.x, world.hoe.position.z) < 1.6 * 1.6) {
+    world.hoe.visible = false;
+    const inv = save.inventory.includes('cangkul') ? save.inventory : [...save.inventory, 'cangkul'];
+    persist({ inventory: inv, hoeTaken: true });
+    if (save.quests.tani === 'active') showToast('Cangkul ditemukan. Kembalikan ke Pak Tani.');
+    else showToast('Cangkul ditemukan. Bawa ke Pak Tani di sawah.');
+  }
 }
 
 function targetInteract() {
@@ -1016,10 +1648,17 @@ function targetInteract() {
   if (world.chest.visible && dist2(world.player.position.x, world.player.position.z, world.chest.position.x, world.chest.position.z) < 2.2 * 2.2) {
     return { type: 'chest', obj: world.chest, label: 'Ambil harta karun' };
   }
+  if (world.pusaka && world.pusaka.visible && dist2(world.player.position.x, world.player.position.z, world.pusaka.position.x, world.pusaka.position.z) < 2.5 * 2.5) {
+    return { type: 'pusaka', obj: world.pusaka, label: 'Ambil Pusaka Nusantara' };
+  }
+  const stone = nearestOf(world.stones, 1.85);
+  if (stone) return { type: 'stone', obj: stone, label: 'Sentuh batu ' + stone.userData.id };
   const w = world.warung;
   if (w && dist2(world.player.position.x, world.player.position.z, w.position.x, w.position.z) < 2.4 * 2.4) {
     return { type: 'warung', obj: w, label: 'Antar ke Warung Desa' };
   }
+  const roh = nearestOf(world.rohs, 1.95, (s) => s.userData.alive);
+  if (roh) return { type: 'roh', obj: roh, label: 'Serang roh batu' };
   const slime = nearestOf(world.slimes, 1.9, (s) => s.userData.alive);
   if (slime) return { type: 'slime', obj: slime, label: 'Serang slime' };
   return null;
@@ -1039,6 +1678,9 @@ function doAction() {
   if (t.type === 'npc') talkTo(t.obj);
   else if (t.type === 'warung') useWarung();
   else if (t.type === 'chest') tryTakeTreasure();
+  else if (t.type === 'pusaka') tryTakePusaka();
+  else if (t.type === 'stone') touchStone(t.obj);
+  else if (t.type === 'roh') attackRoh(t.obj);
   else if (t.type === 'slime') attackSlime(t.obj);
 }
 
@@ -1056,6 +1698,61 @@ function attackSlime(slime) {
   setTimeout(() => { slime.visible = false; }, 220);
 }
 
+function attackRoh(roh) {
+  if (world.attackT > 0 || !roh.userData.alive) return;
+  world.attackT = 0.45;
+  world.attackAnim = 0.35;
+  roh.userData.alive = false;
+  roh.scale.set(1.35, 0.25, 1.35);
+  const id = roh.userData.id;
+  const defeated = { ...save.defeatedRoh, [id]: true };
+  const n = save.rohDefeated + 1;
+  persist({ defeatedRoh: defeated, rohDefeated: n });
+  showToast('Roh batu kalah! (' + n + '/4)');
+  setTimeout(() => { roh.visible = false; }, 220);
+}
+
+function touchStone(stone) {
+  if (save.puzzleDone) {
+    showToast('Prasasti sudah menyala.');
+    return;
+  }
+  if (save.quests.prasasti !== 'active') {
+    showToast('Bicara dulu dengan Mbah Karya.');
+    return;
+  }
+  const need = PUZZLE_ORDER[save.puzzleStep || 0];
+  if (stone.userData.id === need) {
+    const step = (save.puzzleStep || 0) + 1;
+    const done = step >= PUZZLE_ORDER.length;
+    persist({ puzzleStep: step, puzzleDone: done });
+    applyPuzzleVisual();
+    if (done) showToast('Semua batu menyala! Bicara lagi dengan Mbah Karya.');
+    else showToast('Batu ' + stone.userData.id + ' benar. (' + step + '/3)');
+  } else {
+    persist({ puzzleStep: 0, puzzleDone: false });
+    applyPuzzleVisual();
+    showToast('Urutannya salah, coba lagi dari batu hijau.');
+  }
+}
+
+function tryTakePusaka() {
+  if (save.pusakaTaken) return;
+  if (save.quests.roh !== 'active') {
+    showToast('Bicara dulu dengan Kak Andi.');
+    return;
+  }
+  if (save.rohDefeated < 4) {
+    showToast('Kalahkan 4 roh batu terlebih dahulu! (' + save.rohDefeated + '/4)');
+    return;
+  }
+  world.pusaka.visible = false;
+  const inv = save.inventory.includes('pusaka') ? save.inventory : [...save.inventory, 'pusaka'];
+  persist({ inventory: inv, pusakaTaken: true, quests: { ...save.quests, roh: 'done' } });
+  showToast('Pusaka Nusantara didapat!');
+  maybeWin();
+}
+
 function closeInv() { ui.inv.hidden = true; world.blocked = false; layoutControls(); }
 function openInv() {
   if (!world.playing || !ui.dialog.hidden || !ui.win.hidden) return;
@@ -1066,7 +1763,7 @@ function openInv() {
 }
 
 /* -------------------- movement / camera -------------------- */
-function resolveCollisions() {
+function resolveCollisions(prevX, prevZ) {
   const p = world.player.position;
   const pr = 0.42;
   for (const c of world.colliders) {
@@ -1081,11 +1778,12 @@ function resolveCollisions() {
       p.z += dz * push;
     }
   }
-  const r = Math.hypot(p.x, p.z);
-  if (r > WALK_R) {
-    p.x *= WALK_R / r;
-    p.z *= WALK_R / r;
+  if (!isWalkable(p.x, p.z)) {
+    if (isWalkable(p.x, prevZ)) p.z = prevZ;
+    else if (isWalkable(prevX, p.z)) p.x = prevX;
+    else { p.x = prevX; p.z = prevZ; }
   }
+  p.y = groundHeight(p.x, p.z);
 }
 
 function updatePlayer(dt) {
@@ -1099,6 +1797,7 @@ function updatePlayer(dt) {
   const len = Math.hypot(ix, iy);
   if (len > 1) { ix /= len; iy /= len; }
   if (len < 0.08) {
+    world.player.position.y = groundHeight(world.player.position.x, world.player.position.z);
     idleLimbs(dt);
     return 0;
   }
@@ -1112,10 +1811,12 @@ function updatePlayer(dt) {
   const mx = (fx * iy + rx * ix);
   const mz = (fz * iy + rz * ix);
   const speed = PLAYER_SPEED * Math.min(1, len);
+  const prevX = world.player.position.x;
+  const prevZ = world.player.position.z;
   world.player.position.x += mx * speed * dt;
   world.player.position.z += mz * speed * dt;
   world.player.rotation.y = Math.atan2(mx, mz);
-  resolveCollisions();
+  resolveCollisions(prevX, prevZ);
   walkLimbs(dt, len);
   return len;
 }
@@ -1161,7 +1862,7 @@ function updateProps(dt) {
   for (const c of world.coins) {
     if (!c.visible) continue;
     c.rotation.y += dt * 2.4;
-    c.position.y = 0.55 + Math.sin(t * 2.5 + c.userData.phase) * 0.12;
+    c.position.y = groundHeight(c.position.x, c.position.z) + 0.55 + Math.sin(t * 2.5 + c.userData.phase) * 0.12;
   }
   if (world.water) world.water.position.y = -0.42 + Math.sin(t * 0.6) * 0.04;
   for (const s of world.slimes) {
@@ -1173,11 +1874,27 @@ function updateProps(dt) {
     s.position.x = hx + ox;
     s.position.z = hz + oz;
     const bob = 0.12 + Math.abs(Math.sin(t * 3 + s.userData.phase)) * 0.22;
-    s.position.y = bob;
+    s.position.y = groundHeight(s.position.x, s.position.z) + bob;
     s.rotation.y += dt * 0.5;
   }
+  for (const s of world.rohs) {
+    if (!s.userData.alive) continue;
+    s.userData.angle += dt * 0.55;
+    const hx = s.userData.homeX, hz = s.userData.homeZ;
+    const ox = Math.cos(s.userData.angle) * 1.3;
+    const oz = Math.sin(s.userData.angle * 0.8) * 1.2;
+    s.position.x = hx + ox;
+    s.position.z = hz + oz;
+    const bob = 0.2 + Math.abs(Math.sin(t * 2.6 + s.userData.phase)) * 0.28;
+    s.position.y = groundHeight(s.position.x, s.position.z) + bob;
+    s.rotation.y += dt * 0.7;
+  }
+  if (world.pusaka && world.pusaka.visible) {
+    world.pusaka.rotation.y += dt * 1.2;
+    applyGroundY(world.pusaka, 0.48 + Math.sin(t * 2.2) * 0.06);
+  }
   for (const n of world.npcs) {
-    n.position.y = Math.sin(t * 1.6 + n.position.x) * 0.015;
+    n.position.y = groundHeight(n.position.x, n.position.z) + Math.sin(t * 1.6 + n.position.x) * 0.015;
   }
 }
 
@@ -1318,7 +2035,7 @@ function setupControls() {
 
 function showTitle() {
   const existing = loadSave();
-  const hasProgress = !!(existing && (existing.coins > 0 || existing.quests.kades !== 'idle' || existing.px !== START.x));
+  const hasProgress = !!(existing && (existing.coins > 0 || existing.quests.kades !== 'idle' || existing.quests.tani !== 'idle' || existing.px !== START.x));
   ui.btnContinue.hidden = !hasProgress;
   ui.btnNew.hidden = !hasProgress;
   ui.btnStart.hidden = hasProgress;
@@ -1345,17 +2062,25 @@ function startGame(cont) {
       s.visible = true;
       s.scale.set(1, 1, 1);
     }
+    if (world.hoe) world.hoe.visible = true;
+    if (world.pusaka) world.pusaka.visible = true;
+    for (const s of world.rohs) {
+      s.userData.alive = true;
+      s.visible = true;
+      s.scale.set(1, 1, 1);
+    }
   }
-  world.player.position.set(save.px, 0, save.pz);
+  const gy = groundHeight(save.px, save.pz);
+  world.player.position.set(save.px, gy, save.pz);
   world.player.rotation.y = save.rot;
   // snap camera behind
   const dist = 8.2;
   world.camera.position.set(
     save.px - Math.sin(save.rot) * dist,
-    5.4,
+    gy + 5.4,
     save.pz - Math.cos(save.rot) * dist
   );
-  world.camera.lookAt(save.px, 1.25, save.pz);
+  world.camera.lookAt(save.px, gy + 1.25, save.pz);
 
   // apply collected/defeated from save
   for (const c of world.coins) c.visible = !save.collectedCoins[c.userData.id];
@@ -1366,6 +2091,14 @@ function startGame(cont) {
     s.visible = s.userData.alive;
     if (s.userData.alive) s.scale.set(1, 1, 1);
   }
+  if (world.hoe) world.hoe.visible = !save.hoeTaken;
+  if (world.pusaka) world.pusaka.visible = !save.pusakaTaken;
+  for (const s of world.rohs) {
+    s.userData.alive = !save.defeatedRoh[s.userData.id];
+    s.visible = s.userData.alive;
+    if (s.userData.alive) s.scale.set(1, 1, 1);
+  }
+  applyPuzzleVisual();
 
   world.playing = true;
   world.blocked = false;
@@ -1381,8 +2114,9 @@ function startGame(cont) {
   refreshHud();
   layoutControls();
 
-  if (save.won && !world.wonShown) {
-    // already finished previously: don't auto pop the win screen on continue
+  if (save.migratedFromV1) {
+    showToast('Wilayah baru terbuka di utara: Sawah dan Gunung.');
+    persist({ migratedFromV1: false });
   }
 }
 
@@ -1401,11 +2135,12 @@ function boot() {
   if (params.get('test') === '1') {
     window.__pn = {
       setPos(x, z, rot) {
-        world.player.position.set(x, 0, z);
+        const gy = groundHeight(x, z);
+        world.player.position.set(x, gy, z);
         if (rot != null) world.player.rotation.y = rot;
         const dist = 8.2;
-        world.camera.position.set(x - Math.sin(world.player.rotation.y) * dist, 5.4, z - Math.cos(world.player.rotation.y) * dist);
-        world.camera.lookAt(x, 1.25, z);
+        world.camera.position.set(x - Math.sin(world.player.rotation.y) * dist, gy + 5.4, z - Math.cos(world.player.rotation.y) * dist);
+        world.camera.lookAt(x, gy + 1.25, z);
       },
       talk(id) { const n = world.npcs.find((p) => p.userData.id === id); if (n) talkTo(n); },
       action: doAction,
@@ -1415,8 +2150,30 @@ function boot() {
         const s = nearestOf(world.slimes, 8, (o) => o.userData.alive);
         if (s) attackSlime(s);
       },
+      attackNearestRoh() {
+        const s = nearestOf(world.rohs, 24, (o) => o.userData.alive);
+        if (s) attackRoh(s);
+      },
+      attackRohById(id) {
+        world.attackT = 0;
+        const s = world.rohs.find((o) => o.userData.id === id);
+        if (s) attackRoh(s);
+      },
+      attackSlimeById(id) {
+        world.attackT = 0;
+        const s = world.slimes.find((o) => o.userData.id === id);
+        if (s) attackSlime(s);
+      },
+      resetAttack() { world.attackT = 0; },
+      touchStone(id) {
+        const s = world.stones.find((o) => o.userData.id === id);
+        if (s) touchStone(s);
+      },
       takeTreasure: tryTakeTreasure,
+      takePusaka: tryTakePusaka,
       useWarung,
+      walkable: isWalkable,
+      height: groundHeight,
     };
   }
   requestAnimationFrame(tick);
