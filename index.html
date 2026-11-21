@@ -19,7 +19,7 @@
       <div class="title-card">
         <p class="kicker">Permainan petualangan 3D</p>
         <h1>Petualangan<br />Nusantara</h1>
-        <p class="tagline">Jelajahi desa yang meriah, bantu warga, belanja di pasar, pecahkan teka-teki kuil, dan temukan pusaka di gunung.</p>
+        <p class="tagline">Jelajahi desa yang meriah, mancing di kolam dan pantai, hias rumahmu, bantu warga, dan temukan pusaka di gunung.</p>
         <button id="btn-start" class="btn primary" type="button">Mulai Petualangan</button>
         <button id="btn-continue" class="btn" type="button" hidden>Lanjutkan</button>
         <button id="btn-new" class="btn ghost" type="button" hidden>Mulai Baru</button>
@@ -55,6 +55,34 @@
       <p class="shop-coins">Koin: <strong id="shop-coins">0</strong></p>
       <ul id="shop-list"></ul>
       <button id="btn-shop-close" class="btn" type="button">Tutup</button>
+    </div>
+
+    <div id="fish-panel" hidden>
+      <div class="fish-card">
+        <div class="fish-title" id="fish-title">Mancing</div>
+        <p id="fish-status">Lempar pancing ke air, lalu tunggu umpan disambar.</p>
+        <div id="fish-bar" hidden>
+          <div id="fish-zone"></div>
+          <div id="fish-marker"></div>
+        </div>
+        <div class="fish-actions">
+          <button id="btn-fish-main" class="btn primary" type="button">Lempar</button>
+          <button id="btn-fish-cancel" class="btn" type="button">Batal</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="decor-panel" class="panel" hidden>
+      <h2>Hias rumah</h2>
+      <p class="shop-coins">Koin: <strong id="decor-coins">0</strong></p>
+      <ul id="decor-list"></ul>
+      <div class="decor-tools">
+        <button id="btn-decor-place" class="btn primary" type="button">Letakkan</button>
+        <button id="btn-decor-rot" class="btn" type="button">Putar</button>
+        <button id="btn-decor-pick" class="btn" type="button">Angkat</button>
+      </div>
+      <p class="decor-hint">Berdiri di petak yang diinginkan, lalu letakkan atau angkat perabot. Sentuh daftar untuk memilih. Komputer: E letakkan, F putar, X angkat.</p>
+      <button id="btn-decor-close" class="btn" type="button">Selesai</button>
     </div>
 
     <div id="fx-panel" class="panel" hidden>

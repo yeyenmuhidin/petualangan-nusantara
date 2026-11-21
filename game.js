@@ -2,7 +2,8 @@
    Three.js r170 is loaded from a local copy. No runtime CDN. */
 import * as THREE from './three.module.js';
 
-const SAVE_KEY = 'petualangan-nusantara-v2';
+const SAVE_KEY = 'petualangan-nusantara-v3';
+const SAVE_KEY_V2 = 'petualangan-nusantara-v2';
 const SAVE_KEY_LEGACY = 'petualangan-nusantara-v1';
 const ISLAND_R = 36;
 const WALK_R = 33.5;
@@ -33,6 +34,7 @@ const ITEM_NAMES = {
   topi: 'Topi anyaman',
   jamu: 'Jamu hati',
   lentera: 'Lentera kuningan',
+  pancing: 'Pancing kuat',
 };
 const PUZZLE_ORDER = ['hijau', 'kuning', 'merah'];
 const SAWAH = { x: 0, z: -54, rx: 16, rz: 15 };
@@ -43,7 +45,38 @@ const SHOP_ITEMS = [
   { id: 'topi', name: 'Topi anyaman', price: 5, desc: 'Topi anyaman untuk di kepala.' },
   { id: 'jamu', name: 'Jamu hati', price: 6, desc: 'Tambah satu nyawa (hati).' },
   { id: 'lentera', name: 'Lentera kuningan', price: 7, desc: 'Menerangi malam di sekitarmu.' },
+  { id: 'pancing', name: 'Pancing kuat', price: 12, desc: 'Tunggu lebih singkat, ikan langka lebih mudah.' },
 ];
+const FISH_TYPES = {
+  nila: { name: 'Ikan nila', rarity: 'umum', biome: 'pond', price: 2, color: 0x64748b, w: 40 },
+  lele: { name: 'Ikan lele', rarity: 'umum', biome: 'pond', price: 2, color: 0x1c1917, w: 32 },
+  mas: { name: 'Ikan mas', rarity: 'agak langka', biome: 'pond', price: 3, color: 0xf59e0b, w: 18 },
+  gurame: { name: 'Ikan gurame', rarity: 'langka', biome: 'pond', price: 5, color: 0xd6b07a, w: 8 },
+  kembung: { name: 'Ikan kembung', rarity: 'umum', biome: 'beach', price: 2, color: 0x5b7c8a, w: 38 },
+  tongkol: { name: 'Ikan tongkol', rarity: 'agak langka', biome: 'beach', price: 3, color: 0x1e3a5f, w: 22 },
+  baronang: { name: 'Ikan baronang', rarity: 'agak langka', biome: 'beach', price: 4, color: 0x16a34a, w: 16 },
+  kakap: { name: 'Ikan kakap', rarity: 'langka', biome: 'beach', price: 6, color: 0xe11d48, w: 7 },
+};
+const FURNITURE = {
+  kursi: { name: 'Kursi kayu', price: 4, desc: 'Kursi sederhana untuk tamu.' },
+  meja: { name: 'Meja makan', price: 6, desc: 'Meja kayu di tengah ruangan.' },
+  lemari: { name: 'Lemari', price: 7, desc: 'Lemari untuk menyimpan barang.' },
+  kasur: { name: 'Kasur', price: 8, desc: 'Tempat tidur yang nyaman.' },
+  pot: { name: 'Tanaman pot', price: 3, desc: 'Tanaman hijau dalam pot.' },
+  lampu: { name: 'Lampu meja', price: 5, desc: 'Lampu hangat untuk malam.' },
+  batik: { name: 'Lukisan batik', price: 6, desc: 'Lukisan motif batik di dinding.' },
+  karpet: { name: 'Karpet', price: 5, desc: 'Karpet anyaman di lantai.' },
+  trophy: { name: 'Piala ikan', price: 10, desc: 'Piala untuk pemancing handal.', needRare: true },
+};
+const FISH_SPOTS = [
+  { id: 'kolam', name: 'Kolam Desa', x: -6.05, z: -23.2, r: 1.85, waterX: -8.2, waterZ: -23.2, biome: 'pond' },
+  { id: 'pantai', name: 'Dermaga Pantai', x: 4.2, z: 24.35, r: 2.25, waterX: 4.2, waterZ: 26.15, biome: 'beach' },
+];
+const PLAYER_HOUSE = { x: 2.6, z: 6.2, w: 3.2, d: 2.8 };
+const HOUSE_IN = { cx: 90, cz: 0, hw: 4.15, hd: 3.25 };
+const HG = { ox: 86.6, oz: -2.55, cols: 8, rows: 6, size: 0.85 };
+const MAX_FURNITURE = 16;
+
 
 const mats = new Map();
 function mat(color, extra = {}) {
@@ -69,7 +102,12 @@ function distToSeg(px, pz, ax, az, bx, bz) {
   return Math.hypot(px - (ax + abx * u), pz - (az + abz * u));
 }
 
+function inHouseInterior(x, z) {
+  return Math.abs(x - HOUSE_IN.cx) <= HOUSE_IN.hw - 0.2 && Math.abs(z - HOUSE_IN.cz) <= HOUSE_IN.hd - 0.2;
+}
+
 function isWalkable(x, z) {
+  if (inHouseInterior(x, z)) return true;
   if (x * x + z * z <= WALK_R * WALK_R) return true;
   if (distToSeg(x, z, 0, -32.0, 0, -42.5) <= 1.4) return true;
   const sx = (x - SAWAH.x) / SAWAH.rx;
@@ -116,7 +154,7 @@ function defaultSave() {
     quests: {
       kades: 'idle', sari: 'idle', udin: 'idle', gua: 'idle',
       tani: 'idle', rina: 'idle', prasasti: 'idle', roh: 'idle',
-      ayam: 'idle', surat: 'idle',
+      ayam: 'idle', surat: 'idle', mancing: 'idle', rumah: 'idle',
     },
     defeatedSlimes: {},
     slimesDefeated: 0,
@@ -133,9 +171,15 @@ function defaultSave() {
     view: 'third',
     sound: true,
     vibrate: true,
-    shop: { sepatu: false, topi: false, jamu: false, lentera: false },
+    shop: { sepatu: false, topi: false, jamu: false, lentera: false, pancing: false },
     letters: { rumah1: false, rumah2: false, rumah3: false },
     ayamCaught: {},
+    fishBag: {},
+    fishLog: {},
+    fishTotal: 0,
+    houseOwned: {},
+    housePlaced: [],
+    migratedFromV2: false,
     hp: 3,
     maxHp: 3,
     migratedVillage: false,
@@ -146,33 +190,50 @@ function defaultSave() {
   };
 }
 
+function mergeSave(data) {
+  const base = defaultSave();
+  if (!data) return base;
+  const placed = Array.isArray(data.housePlaced) ? data.housePlaced.filter((p) => p && FURNITURE[p.id]) : [];
+  return {
+    ...base,
+    ...data,
+    quests: { ...base.quests, ...(data.quests || {}) },
+    shop: { ...base.shop, ...(data.shop || {}) },
+    letters: { ...base.letters, ...(data.letters || {}) },
+    ayamCaught: { ...(data.ayamCaught || {}) },
+    fishBag: { ...(data.fishBag || {}) },
+    fishLog: { ...(data.fishLog || {}) },
+    houseOwned: { ...(data.houseOwned || {}) },
+    housePlaced: placed,
+    fishTotal: data.fishTotal || 0,
+  };
+}
+
 function loadSave() {
   try {
     let raw = localStorage.getItem(SAVE_KEY);
     let migrated = false;
+    let fromV2 = false;
+    if (!raw) {
+      raw = localStorage.getItem(SAVE_KEY_V2);
+      if (raw) { migrated = true; fromV2 = true; }
+    }
     if (!raw) {
       raw = localStorage.getItem(SAVE_KEY_LEGACY);
       if (raw) migrated = true;
     }
     if (!raw) return null;
-    const data = JSON.parse(raw);
-    const merged = {
-      ...defaultSave(),
-      ...data,
-      quests: { ...defaultSave().quests, ...(data.quests || {}) },
-      shop: { ...defaultSave().shop, ...(data.shop || {}) },
-      letters: { ...defaultSave().letters, ...(data.letters || {}) },
-      ayamCaught: { ...(data.ayamCaught || {}) },
-    };
-    if (migrated) {
+    const merged = mergeSave(JSON.parse(raw));
+    if (migrated && !fromV2) {
       if (merged.won) merged.won = false;
       merged.migratedFromV1 = true;
     }
+    if (fromV2) merged.migratedFromV2 = true;
     if (merged.won && (merged.quests.ayam !== 'done' || merged.quests.surat !== 'done')) {
       merged.won = false;
       merged.migratedVillage = true;
     }
-    if (migrated || merged.migratedVillage) writeSave(merged);
+    if (migrated || merged.migratedVillage || merged.migratedFromV2) writeSave(merged);
     return merged;
   } catch (err) {
     return null;
@@ -228,6 +289,21 @@ const ui = {
   shopList: $('shop-list'),
   shopCoins: $('shop-coins'),
   btnShopClose: $('btn-shop-close'),
+  fishPanel: $('fish-panel'),
+  fishTitle: $('fish-title'),
+  fishStatus: $('fish-status'),
+  fishBar: $('fish-bar'),
+  fishZone: $('fish-zone'),
+  fishMarker: $('fish-marker'),
+  btnFishMain: $('btn-fish-main'),
+  btnFishCancel: $('btn-fish-cancel'),
+  decorPanel: $('decor-panel'),
+  decorList: $('decor-list'),
+  decorCoins: $('decor-coins'),
+  btnDecorPlace: $('btn-decor-place'),
+  btnDecorRot: $('btn-decor-rot'),
+  btnDecorPick: $('btn-decor-pick'),
+  btnDecorClose: $('btn-decor-close'),
 };
 
 const world = {
@@ -294,6 +370,16 @@ const world = {
   mapT: 0,
   overview: false,
   playerGear: { topi: null, lantern: null },
+  ponds: [],
+  playerHouse: null,
+  houseDoor: null,
+  houseExit: null,
+  houseFurnish: null,
+  inHouse: false,
+  fishing: null,
+  bobber: null,
+  decorOpen: false,
+  decorSel: null,
 };
 
 let save = defaultSave();
@@ -757,7 +843,7 @@ function makeBeringin(x, z) {
 }
 
 function makePond(x, z, r) {
-  const water = mesh(new THREE.CircleGeometry(r, 16), mat(0x2a7d8a), x, -0.06, z);
+  const water = mesh(new THREE.CircleGeometry(r, 16), mat(0x2a7d8a), x, 0.05, z);
   water.rotation.x = -Math.PI / 2;
   world.scene.add(water);
   const stones = [];
@@ -844,6 +930,179 @@ function placeFlowers() {
   placeInstanced(new THREE.SphereGeometry(0.1, 5, 4), mat(0xe11d48), heads, (p) => p.y);
 }
 
+function buildPondJetty() {
+  const g = new THREE.Group();
+  for (let i = 0; i < 3; i++) {
+    g.add(mesh(new THREE.BoxGeometry(0.95, 0.1, 0.42), 0x8b5a2b, 0, 0.22, i * 0.44));
+  }
+  g.add(mesh(new THREE.BoxGeometry(0.1, 0.5, 0.1), 0x6b4a28, -0.38, 0.2, 0.08));
+  g.add(mesh(new THREE.BoxGeometry(0.1, 0.5, 0.1), 0x6b4a28, 0.38, 0.2, 0.08));
+  g.add(mesh(new THREE.BoxGeometry(0.1, 0.5, 0.1), 0x6b4a28, -0.38, 0.2, 1.1));
+  g.add(mesh(new THREE.BoxGeometry(0.1, 0.5, 0.1), 0x6b4a28, 0.38, 0.2, 1.1));
+  g.position.set(-6.15, 0, -23.2);
+  g.rotation.y = Math.PI / 2;
+  world.scene.add(g);
+}
+
+function buildPlayerHouse() {
+  const h = makeHouse(PLAYER_HOUSE.x, PLAYER_HOUSE.z, 0, 0xdbeafe, 0x0f766e, PLAYER_HOUSE.w, PLAYER_HOUSE.d, 2.2);
+  h.userData.kind = 'player-house';
+  const potL = new THREE.Group();
+  potL.add(mesh(new THREE.CylinderGeometry(0.16, 0.18, 0.22, 8), 0xb45309, 0, 0.12, 0));
+  potL.add(mesh(new THREE.SphereGeometry(0.16, 6, 5), mat(0x16a34a), 0, 0.32, 0));
+  potL.position.set(PLAYER_HOUSE.x - 1.15, 0, PLAYER_HOUSE.z + 1.55);
+  const potR = potL.clone();
+  potR.position.set(PLAYER_HOUSE.x + 1.15, 0, PLAYER_HOUSE.z + 1.55);
+  world.scene.add(potL, potR);
+  world.playerHouse = h;
+  world.houseDoor = { x: PLAYER_HOUSE.x, z: PLAYER_HOUSE.z + PLAYER_HOUSE.d / 2 + 0.55 };
+}
+
+function makeBatikTexture() {
+  const c = document.createElement('canvas');
+  c.width = 128; c.height = 128;
+  const g = c.getContext('2d');
+  g.fillStyle = '#1d4e4a';
+  g.fillRect(0, 0, 128, 128);
+  g.fillStyle = '#c4a24a';
+  for (let i = 0; i < 8; i++) {
+    for (let j = 0; j < 8; j++) {
+      const x = i * 16 + 8, y = j * 16 + 8;
+      g.beginPath();
+      g.moveTo(x, y - 6); g.lineTo(x + 5, y); g.lineTo(x, y + 6); g.lineTo(x - 5, y);
+      g.closePath();
+      g.fill();
+      if ((i + j) % 2 === 0) {
+        g.fillStyle = '#f5f0e6';
+        g.fillRect(x - 2, y - 2, 4, 4);
+        g.fillStyle = '#c4a24a';
+      }
+    }
+  }
+  g.strokeStyle = '#7c2d12';
+  g.lineWidth = 8;
+  g.strokeRect(4, 4, 120, 120);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.minFilter = THREE.LinearFilter;
+  return tex;
+}
+
+function makeFurnitureMesh(id) {
+  const g = new THREE.Group();
+  g.userData.furnId = id;
+  if (id === 'kursi') {
+    g.add(mesh(new THREE.BoxGeometry(0.55, 0.08, 0.55), 0x8b5a2b, 0, 0.42, 0));
+    g.add(mesh(new THREE.BoxGeometry(0.55, 0.5, 0.08), 0x7c4a1e, 0, 0.71, -0.24));
+    [[-0.2, -0.2], [0.2, -0.2], [-0.2, 0.2], [0.2, 0.2]].forEach(([lx, lz]) => {
+      g.add(mesh(new THREE.BoxGeometry(0.07, 0.4, 0.07), 0x6b4a28, lx, 0.2, lz));
+    });
+  } else if (id === 'meja') {
+    g.add(mesh(new THREE.BoxGeometry(0.95, 0.08, 0.62), 0x8b5a2b, 0, 0.58, 0));
+    [[-0.38, -0.22], [0.38, -0.22], [-0.38, 0.22], [0.38, 0.22]].forEach(([lx, lz]) => {
+      g.add(mesh(new THREE.BoxGeometry(0.08, 0.54, 0.08), 0x6b4a28, lx, 0.27, lz));
+    });
+  } else if (id === 'lemari') {
+    g.add(mesh(new THREE.BoxGeometry(0.7, 1.35, 0.42), 0x7c4a1e, 0, 0.68, 0));
+    g.add(mesh(new THREE.BoxGeometry(0.02, 1.2, 0.36), 0x6b4a28, 0, 0.68, 0.2));
+    g.add(mesh(new THREE.BoxGeometry(0.06, 0.06, 0.04), 0xe8b84a, -0.16, 0.68, 0.22));
+    g.add(mesh(new THREE.BoxGeometry(0.06, 0.06, 0.04), 0xe8b84a, 0.16, 0.68, 0.22));
+  } else if (id === 'kasur') {
+    g.add(mesh(new THREE.BoxGeometry(0.85, 0.18, 1.25), 0xf5f0e6, 0, 0.28, 0));
+    g.add(mesh(new THREE.BoxGeometry(0.9, 0.1, 1.3), 0x7c2d12, 0, 0.16, 0));
+    g.add(mesh(new THREE.BoxGeometry(0.5, 0.12, 0.28), 0xdbeafe, 0, 0.4, 0.42));
+  } else if (id === 'pot') {
+    g.add(mesh(new THREE.CylinderGeometry(0.16, 0.2, 0.24, 8), 0xb45309, 0, 0.14, 0));
+    g.add(mesh(new THREE.SphereGeometry(0.2, 7, 6), mat(0x16a34a), 0, 0.38, 0));
+    g.add(mesh(new THREE.SphereGeometry(0.12, 6, 5), mat(0x237a3a), 0.08, 0.5, -0.04));
+  } else if (id === 'lampu') {
+    g.add(mesh(new THREE.CylinderGeometry(0.12, 0.16, 0.08, 8), 0x6b4a28, 0, 0.06, 0));
+    g.add(mesh(new THREE.BoxGeometry(0.05, 0.45, 0.05), 0x57534e, 0, 0.3, 0));
+    const glow = mesh(new THREE.SphereGeometry(0.14, 8, 6), new THREE.MeshBasicMaterial({ color: 0xfde68a }), 0, 0.58, 0);
+    g.add(glow);
+  } else if (id === 'batik') {
+    if (!world.batikTex) world.batikTex = makeBatikTexture();
+    const matB = new THREE.MeshBasicMaterial({ map: world.batikTex });
+    const pl = mesh(new THREE.PlaneGeometry(0.95, 0.7), matB, 0, 1.55, 0.01);
+    g.add(mesh(new THREE.BoxGeometry(1.04, 0.8, 0.05), 0x5c3d1e, 0, 1.55, -0.02));
+    g.add(pl);
+  } else if (id === 'karpet') {
+    g.add(mesh(new THREE.BoxGeometry(1.15, 0.04, 0.85), 0x9a3412, 0, 0.03, 0));
+    g.add(mesh(new THREE.BoxGeometry(0.95, 0.02, 0.65), 0xc4a24a, 0, 0.05, 0));
+  } else if (id === 'trophy') {
+    g.add(mesh(new THREE.BoxGeometry(0.28, 0.1, 0.28), 0x6b4a28, 0, 0.06, 0));
+    g.add(mesh(new THREE.BoxGeometry(0.1, 0.22, 0.1), 0xe8b84a, 0, 0.2, 0));
+    g.add(mesh(new THREE.BoxGeometry(0.22, 0.1, 0.1), 0x38bdf8, 0, 0.38, 0));
+    g.add(mesh(new THREE.BoxGeometry(0.1, 0.08, 0.02), 0x38bdf8, -0.14, 0.38, 0));
+    g.add(mesh(new THREE.BoxGeometry(0.08, 0.16, 0.08), 0xb45309, 0, 0.52, 0));
+  }
+  return g;
+}
+
+function gridToWorld(gx, gz) {
+  return { x: HG.ox + (gx + 0.5) * HG.size, z: HG.oz + (gz + 0.5) * HG.size };
+}
+
+function worldToGrid(x, z) {
+  const gx = Math.max(0, Math.min(HG.cols - 1, Math.floor((x - HG.ox) / HG.size)));
+  const gz = Math.max(0, Math.min(HG.rows - 1, Math.floor((z - HG.oz) / HG.size)));
+  return { gx, gz };
+}
+
+function playerGrid() {
+  const p = world.player.position;
+  const fx = Math.sin(world.player.rotation.y);
+  const fz = Math.cos(world.player.rotation.y);
+  return worldToGrid(p.x + fx * 0.7, p.z + fz * 0.7);
+}
+
+function buildHouseInterior() {
+  const root = new THREE.Group();
+  const { cx, cz, hw, hd } = HOUSE_IN;
+  const floor = mesh(new THREE.BoxGeometry(hw * 2, 0.08, hd * 2), 0xb0894d, cx, -0.02, cz);
+  root.add(floor);
+  const wallH = 3.15;
+  const wallY = wallH / 2;
+  root.add(mesh(new THREE.BoxGeometry(hw * 2 + 0.2, wallH, 0.16), 0xf5f0e6, cx, wallY, cz - hd));
+  root.add(mesh(new THREE.BoxGeometry(hw * 2 + 0.2, wallH, 0.16), 0xf5f0e6, cx, wallY, cz + hd));
+  root.add(mesh(new THREE.BoxGeometry(0.16, wallH, hd * 2), 0xf3ead8, cx - hw, wallY, cz));
+  root.add(mesh(new THREE.BoxGeometry(0.16, wallH, hd * 2), 0xf3ead8, cx + hw, wallY, cz));
+  // doorway gap on south (+Z) wall: a darker door frame
+  root.add(mesh(new THREE.BoxGeometry(1.15, 2.05, 0.08), 0x5c3d1e, cx, 1.02, cz + hd + 0.02));
+  root.add(mesh(new THREE.BoxGeometry(0.9, 1.8, 0.04), 0x7c4a1e, cx, 0.95, cz + hd + 0.06));
+  // windows
+  const win = (x, z, rot, ix, iz) => {
+    const frame = mesh(new THREE.BoxGeometry(1.02, 0.82, 0.06), 0x6b4a28, x, 1.55, z);
+    frame.rotation.y = rot;
+    root.add(frame);
+    const glass = mesh(new THREE.BoxGeometry(0.88, 0.66, 0.04), new THREE.MeshBasicMaterial({ color: 0x7dd3fc }), x + ix, 1.55, z + iz);
+    glass.rotation.y = rot;
+    root.add(glass);
+  };
+  win(cx - 1.7, cz - hd + 0.2, 0, 0, 0.06);
+  win(cx + 1.7, cz - hd + 0.2, 0, 0, 0.06);
+  win(cx - hw + 0.2, cz, Math.PI / 2, 0.06, 0);
+  win(cx + hw - 0.2, cz, Math.PI / 2, -0.06, 0);
+  // baseboard
+  root.add(mesh(new THREE.BoxGeometry(hw * 2, 0.1, 0.08), 0x8b5a2b, cx, 0.08, cz - hd + 0.1));
+  root.add(mesh(new THREE.BoxGeometry(hw * 2, 0.1, 0.08), 0x8b5a2b, cx, 0.08, cz + hd - 0.1));
+  const furnish = new THREE.Group();
+  root.add(furnish);
+  world.scene.add(root);
+  world.houseRoot = root;
+  world.houseFurnish = furnish;
+  world.houseExit = { x: cx, z: cz + hd - 0.55 };
+  addCollider(cx, cz - hd, 0.55);
+  addCollider(cx, cz + hd, 0.55);
+  addCollider(cx - hw, cz, 0.55);
+  addCollider(cx + hw, cz, 0.55);
+  // keep corners tight
+  addCollider(cx - hw, cz - hd, 0.7);
+  addCollider(cx + hw, cz - hd, 0.7);
+  addCollider(cx - hw, cz + hd, 0.7);
+  addCollider(cx + hw, cz + hd, 0.7);
+}
+
 function buildVillage() {
   makeHouse(-7.5, -10.2, 0.25, 0xf2e4c8, 0xb45309);
   makeHouse(8.2, -11.4, -0.4, 0xf6d6b8, 0x9a3412, 3.0, 2.6, 2.0);
@@ -888,6 +1147,7 @@ function buildVillage() {
   makeBalai(8.4, -20.6);
   makeBeringin(0.2, -19.4);
   world.ponds = [makePond(-8.6, -23.2, 2.15)];
+  buildPondJetty();
 
   makeStall(9.4, 0.6, -0.4, 0xdc2626, 2.3);
   makeStall(10.6, -2.2, -0.15, 0xca8a04, 2.1);
@@ -912,8 +1172,11 @@ function buildVillage() {
   placeFenceLoop([[-4.6, -22.4], [3.6, -22.4], [3.6, -16.6], [-4.6, -16.6]], 2);
 
   placeFlowers();
+  buildPlayerHouse();
 
   makeSign('DESA', -1.5, 1.5, 0);
+  makeSign('RUMAHMU', PLAYER_HOUSE.x - 1.85, PLAYER_HOUSE.z + 2.15, -0.15);
+  makeSign('MANCING', -5.35, -21.55, 0.4);
   makeSign('HUTAN', 13.2, -6, Math.PI / 2);
   makeSign('PANTAI', 1.2, 12.2, 0);
   makeSign('GUA', -14.2, 3.5, -Math.PI / 2);
@@ -1498,7 +1761,7 @@ function updateParticles(dt) {
   const cam = world.camera;
   const cx = cam ? cam.position.x : 0;
   const cz = cam ? cam.position.z : 0;
-  if (world.rain && world.rainAmt > 0.04) {
+  if (world.rain && world.rainAmt > 0.04 && !world.inHouse) {
     const { mesh, pos, drops } = world.rain;
     mesh.visible = true;
     mesh.material.opacity = 0.35 + world.rainAmt * 0.4;
@@ -1569,8 +1832,13 @@ function updateAtmosphere(dt) {
   if (world.scene) {
     world.scene.background.copy(sky);
     world.scene.fog.color.copy(sky);
-    world.scene.fog.near = 48 + night * 18;
-    world.scene.fog.far = 140 - night * 20 - world.rainAmt * 18;
+    if (world.inHouse) {
+      world.scene.fog.near = 12;
+      world.scene.fog.far = 24;
+    } else {
+      world.scene.fog.near = 48 + night * 18;
+      world.scene.fog.far = 140 - night * 20 - world.rainAmt * 18;
+    }
   }
   if (world.renderer) world.renderer.setClearColor(sky, 1);
   if (world.hemi) {
@@ -2442,6 +2710,12 @@ function spawnNpcs() {
       wander: true,
       look: { shirt: 0xca8a04, pants: 0x3f3f46, skin: 0xb8874e, hair: 0x1c1410, hat: 'cap' },
     },
+    {
+      id: 'dedi',
+      name: 'Pak Dedi',
+      x: -6.15, z: -21.55, rot: -0.4,
+      look: { shirt: 0x1d4e89, pants: 0x1e3a5f, skin: 0xb8874e, hair: 0x1c1410, hat: 'cap' },
+    },
   ];
   world.npcs = list.map((spec) => {
     const p = makePerson(spec.look);
@@ -2553,6 +2827,7 @@ function buildWorld() {
   spawnRohs();
   spawnPusaka();
   spawnAnimals();
+  buildHouseInterior();
 }
 
 /* -------------------- save / ui -------------------- */
@@ -2605,6 +2880,14 @@ function refreshHud() {
     const n = letterCount();
     lines.push(n >= 3 ? 'Kembali ke Pak Hasan di balai' : 'Antar surat ke rumah (' + n + '/3)');
   }
+  if (save.quests.mancing === 'active') {
+    const n = Math.min(save.fishTotal || 0, 3);
+    lines.push(n >= 3 ? 'Bicara lagi dengan Pak Dedi' : 'Mancing 3 ikan (' + n + '/3)');
+  }
+  if (save.quests.rumah === 'active') {
+    const n = housePlacedCount();
+    lines.push(n >= 1 ? 'Bicara lagi dengan Pak Kades' : 'Hias rumahmu dengan perabot');
+  }
   if (!lines.length) {
     ui.missions.innerHTML = '<p>Bicara dengan warga untuk menerima misi.</p>';
   } else {
@@ -2621,12 +2904,27 @@ function renderInventory() {
     if (save.shop.sepatu) items.push(ITEM_NAMES.sepatu);
     if (save.shop.topi) items.push(ITEM_NAMES.topi);
     if (save.shop.lentera) items.push(ITEM_NAMES.lentera);
+    if (save.shop.pancing) items.push(ITEM_NAMES.pancing);
+    else items.push('Pancing bambu');
     if (save.shop.jamu) items.push('Jamu hati (sudah diminum)');
   }
-  if (save.inventory.length === 0 && save.coins === 0 && !(save.shop && (save.shop.sepatu || save.shop.topi || save.shop.lentera || save.shop.jamu))) {
+  const bag = save.fishBag || {};
+  const fishLines = Object.keys(FISH_TYPES).filter((id) => bag[id] > 0).map((id) => FISH_TYPES[id].name + ' ×' + bag[id]);
+  const logN = fishLogCount();
+  const owned = save.houseOwned || {};
+  const houseLines = Object.keys(FURNITURE).filter((id) => owned[id] > 0).map((id) => FURNITURE[id].name + ' ×' + owned[id]);
+  const empty = items.length === 1 && items[0].startsWith('Koin: 0') && !fishLines.length && !houseLines.length && logN === 0 && !(save.shop && (save.shop.sepatu || save.shop.topi || save.shop.lentera || save.shop.jamu || save.shop.pancing)) && save.inventory.length === 0;
+  if (empty) {
     ui.invList.innerHTML = '<li class="empty">Tas masih kosong.</li>';
   } else {
-    ui.invList.innerHTML = items.map((t) => '<li>' + t + '</li>').join('');
+    let html = items.map((t) => '<li>' + t + '</li>').join('');
+    html += '<li class="inv-sub">Ikan (' + logN + '/8 jenis)</li>';
+    html += fishLines.length ? fishLines.map((t) => '<li>' + t + '</li>').join('') : '<li class="empty">Belum ada ikan di tas.</li>';
+    if (houseLines.length) {
+      html += '<li class="inv-sub">Perabot</li>';
+      html += houseLines.map((t) => '<li>' + t + '</li>').join('');
+    }
+    ui.invList.innerHTML = html;
   }
 }
 
@@ -2647,6 +2945,7 @@ function setPrompt(text) {
 }
 
 function areaAt(x, z) {
+  if (inHouseInterior(x, z)) return 'Rumah';
   if (z < -66 || (x > 13 && z < -62)) return 'Gunung';
   if (z < -38) return 'Sawah';
   if (x < -14 && z > -10 && z < 16) return 'Gua';
@@ -2699,6 +2998,7 @@ function talkTo(npc) {
   else if (id === 'ijah') talkIjah();
   else if (id === 'hasan') talkHasan();
   else if (id === 'yanti') talkYanti();
+  else if (id === 'dedi') talkDedi();
   else talkFlavor(npc);
 }
 
@@ -2716,6 +3016,24 @@ function talkKades() {
   } else if (q === 'active') {
     openDialog('Pak Kades', 'Hebat! 10 koin sudah terkumpul. Terima kasih, desa kami jadi terbantu.', [
       { label: 'Sama-sama', primary: true, fn: () => { persist({ quests: { ...save.quests, kades: 'done' } }); showToast('Misi Pak Kades selesai.'); closeDialog(); onQuestComplete(); maybeWin(); } },
+    ]);
+  } else if (save.quests.rumah === 'idle') {
+    openDialog('Pak Kades', 'Terima kasih sudah membantu desa. Ada rumah kosong di selatan, dekat jalan ke pantai. Itu untukmu, nak. Hias dengan perabot dari toko atau dari dalam rumah.', [
+      { label: 'Saya hias, Pak', primary: true, fn: () => { persist({ quests: { ...save.quests, rumah: 'active' } }); showToast('Misi baru: hias rumahmu di desa.'); closeDialog(); } },
+      { label: 'Nanti saja', fn: closeDialog },
+    ]);
+  } else if (save.quests.rumah === 'active' && housePlacedCount() < 1) {
+    openDialog('Pak Kades', 'Rumahmu ada di selatan desa, ada papan "RUMAHMU". Beli perabot, masuk ke dalam, lalu letakkan setidaknya satu perabot.', [
+      { label: 'Baik, Pak', primary: true, fn: closeDialog },
+    ]);
+  } else if (save.quests.rumah === 'active') {
+    openDialog('Pak Kades', 'Rumahmu sudah mulai terasa hangat. Bagus, nak. Ini sedikit koin untuk perabot berikutnya.', [
+      { label: 'Terima kasih, Pak', primary: true, fn: () => {
+        persist({ coins: save.coins + 4, quests: { ...save.quests, rumah: 'done' } });
+        showToast('Misi rumah selesai. Kau mendapat 4 koin.');
+        closeDialog();
+        onQuestComplete();
+      } },
     ]);
   } else {
     openDialog('Pak Kades', 'Terima kasih sudah membantu desa. Ada jembatan baru ke utara, menuju sawah dan gunung. Hutan di timur, pantai di selatan, dan gua di barat juga menanti.', [
@@ -2941,14 +3259,52 @@ function letterCount() {
 function talkFlavor(npc) {
   const id = npc.userData.id;
   let text = 'Selamat datang di desa kami.';
-  if (id === 'budi') text = 'Pasar pagi ini ramai, nak. Coba lihat toko Bu Ijah kalau butuh sepatu atau lentera.';
-  else if (id === 'joko') text = 'Lapangan di utara sudah ada pohon beringin. Nenek Tari sering duduk di sana.';
-  else if (id === 'tari') text = 'Duduklah sebentar di bawah beringin, nak. Desa ini makin ramai, syukurlah.';
+  if (id === 'budi') text = 'Pasar pagi ini ramai, nak. Coba lihat toko Bu Ijah kalau butuh sepatu, pancing, atau perabot rumah.';
+  else if (id === 'joko') text = 'Ada rumah kosong di selatan desa, dekat jalan ke pantai. Katanya itu untuk pendatang baru.';
+  else if (id === 'tari') text = 'Kolam di dekat langgar enak untuk mancing, nak. Pak Dedi biasanya menunggu di tepinya.';
   openDialog(npc.userData.name, text, [{ label: 'Baik', primary: true, fn: closeDialog }]);
 }
 
+function talkDedi() {
+  const q = save.quests.mancing;
+  const n = save.fishTotal || 0;
+  const bagN = fishCount();
+  const sellBtn = { label: bagN ? ('Jual ikan (' + fishValue() + ' koin)') : 'Tidak ada ikan', fn: () => {
+    if (!bagN) { closeDialog(); return; }
+    sellAllFish();
+    closeDialog();
+  } };
+  if (q === 'idle') {
+    openDialog('Pak Dedi', 'Kolam desa dan dermaga pantai ramai ikannya. Coba mancing, lalu kumpulkan 3 ikan. Nanti bisa dijual kepadaku atau di Toko Pasar. Pancing bambu sudah cukup untuk mulai.', [
+      { label: 'Saya mancing', primary: true, fn: () => { persist({ quests: { ...save.quests, mancing: 'active' } }); showToast('Misi baru: mancing 3 ikan.'); closeDialog(); } },
+      { label: 'Nanti saja', fn: closeDialog },
+    ]);
+  } else if (q === 'active' && n < 3) {
+    openDialog('Pak Dedi', 'Ikan yang tertangkap masih ' + n + ' dari 3. Lempar pancing di kolam atau di dermaga pantai, lalu tarik saat umpan disambar.', [
+      sellBtn,
+      { label: 'Baik, Pak', primary: true, fn: closeDialog },
+    ]);
+  } else if (q === 'active') {
+    openDialog('Pak Dedi', 'Tiga ikan sudah di tangan! Kau cepat belajar. Ini sedikit koin, dan kalau mau hasil lebih bagus, beli pancing kuat di toko Bu Ijah.', [
+      { label: 'Terima kasih', primary: true, fn: () => {
+        persist({ coins: save.coins + 5, quests: { ...save.quests, mancing: 'done' } });
+        showToast('Misi mancing selesai. Kau mendapat 5 koin.');
+        closeDialog();
+        onQuestComplete();
+      } },
+    ]);
+  } else {
+    openDialog('Pak Dedi', bagN
+      ? ('Mau jual ' + bagN + ' ikan seharga ' + fishValue() + ' koin? Catatanmu ' + fishLogCount() + ' dari 8 jenis.')
+      : ('Kolam dan pantai menunggu. Catatanmu ' + fishLogCount() + ' dari 8 jenis. Pancing kuat di toko membantu mendapat ikan langka.'), [
+      sellBtn,
+      { label: 'Nanti saja', primary: !bagN, fn: closeDialog },
+    ]);
+  }
+}
+
 function talkIjah() {
-  openDialog('Bu Ijah', 'Selamat datang di Toko Pasar. Ada sepatu lari, topi anyaman, jamu hati, dan lentera kuningan. Mau lihat-lihat?', [
+  openDialog('Bu Ijah', 'Selamat datang di Toko Pasar. Ada sepatu, topi, jamu, lentera, pancing kuat, dan perabot rumah. Ikan hasil pancingan juga bisa dijual di sini.', [
     { label: 'Lihat barang', primary: true, fn: () => { closeDialog(); openShop(); } },
     { label: 'Nanti saja', fn: closeDialog },
   ]);
@@ -3050,6 +3406,7 @@ const MAIL_NAMES = { rumah1: 'rumah sebelah barat', rumah2: 'rumah dekat sumur',
 
 function openShop() {
   if (!world.playing || !ui.win.hidden) return;
+  if (world.fishing && world.fishing.active) return;
   if (!ui.dialog.hidden) closeDialog();
   ui.inv.hidden = true;
   if (ui.fxPanel) ui.fxPanel.hidden = true;
@@ -3061,16 +3418,43 @@ function openShop() {
 
 function closeShop() {
   if (ui.shopPanel) ui.shopPanel.hidden = true;
-  if ((!ui.fxPanel || ui.fxPanel.hidden) && ui.inv.hidden) {
+  if (!uiBlocking()) {
     world.blocked = false;
     layoutControls();
   }
+}
+
+function addShopRow(parent, title, desc, rightEl) {
+  const li = document.createElement('li');
+  li.innerHTML = '<div class="shop-name">' + title + '</div><div class="shop-desc">' + desc + '</div><div class="shop-buy"></div>';
+  li.querySelector('.shop-buy').appendChild(rightEl);
+  parent.appendChild(li);
+  return li;
 }
 
 function renderShop() {
   if (!ui.shopList) return;
   if (ui.shopCoins) ui.shopCoins.textContent = String(save.coins);
   ui.shopList.innerHTML = '';
+  const bagN = fishCount();
+  if (bagN) {
+    const wrap = document.createElement('div');
+    wrap.style.display = 'flex';
+    wrap.style.justifyContent = 'space-between';
+    wrap.style.alignItems = 'center';
+    wrap.style.gap = '8px';
+    wrap.style.width = '100%';
+    const price = document.createElement('span');
+    price.textContent = fishValue() + ' koin';
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'btn primary';
+    b.textContent = 'Jual semua';
+    b.addEventListener('click', (e) => { e.preventDefault(); sellAllFish(); });
+    wrap.appendChild(price);
+    wrap.appendChild(b);
+    addShopRow(ui.shopList, 'Jual ikan (' + bagN + ' ekor)', 'Hasil mancing dijual ke toko.', wrap);
+  }
   SHOP_ITEMS.forEach((it) => {
     const owned = !!(save.shop && save.shop[it.id]);
     const li = document.createElement('li');
@@ -3092,6 +3476,34 @@ function renderShop() {
       b.textContent = 'Beli';
       if (!can) { b.disabled = true; li.classList.add('pricey'); }
       b.addEventListener('click', (e) => { e.preventDefault(); buyItem(it.id); });
+      row.appendChild(b);
+    }
+    ui.shopList.appendChild(li);
+  });
+  Object.keys(FURNITURE).forEach((id) => {
+    const it = FURNITURE[id];
+    const owned = (save.houseOwned && save.houseOwned[id]) || 0;
+    const cap = id === 'trophy' ? 1 : 3;
+    const li = document.createElement('li');
+    const lockedRare = !!(it.needRare && !hasRareFish());
+    const can = !lockedRare && owned < cap && save.coins >= it.price;
+    li.innerHTML = '<div class="shop-name">' + it.name + '</div><div class="shop-desc">' + it.desc + (owned ? ' (dimiliki ' + owned + ')' : '') + (lockedRare ? ' Butuh ikan langka.' : '') + '</div><div class="shop-buy"></div>';
+    const row = li.querySelector('.shop-buy');
+    if (owned >= cap) {
+      const s = document.createElement('span');
+      s.className = 'owned';
+      s.textContent = 'Sudah cukup';
+      row.appendChild(s);
+    } else {
+      const price = document.createElement('span');
+      price.textContent = it.price + ' koin';
+      row.appendChild(price);
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'btn primary';
+      b.textContent = 'Beli';
+      if (!can) { b.disabled = true; li.classList.add('pricey'); }
+      b.addEventListener('click', (e) => { e.preventDefault(); buyFurniture(id); });
       row.appendChild(b);
     }
     ui.shopList.appendChild(li);
@@ -3119,6 +3531,500 @@ function buyItem(id) {
   return true;
 }
 
+
+function fishCount() {
+  const bag = save.fishBag || {};
+  let n = 0;
+  for (const k in bag) n += bag[k] || 0;
+  return n;
+}
+
+function fishValue() {
+  const bag = save.fishBag || {};
+  let v = 0;
+  for (const k in bag) v += (bag[k] || 0) * ((FISH_TYPES[k] && FISH_TYPES[k].price) || 0);
+  return v;
+}
+
+function fishLogCount() {
+  const log = save.fishLog || {};
+  return Object.keys(FISH_TYPES).filter((id) => log[id] > 0).length;
+}
+
+function hasRareFish() {
+  const log = save.fishLog || {};
+  return !!(log.gurame || log.kakap);
+}
+
+function housePlacedCount() {
+  return (save.housePlaced || []).length;
+}
+
+function ownedFree(id) {
+  const owned = (save.houseOwned && save.houseOwned[id]) || 0;
+  const used = (save.housePlaced || []).filter((p) => p.id === id).length;
+  return Math.max(0, owned - used);
+}
+
+function furnitureRadius(id) {
+  if (id === 'kasur' || id === 'meja') return 0.55;
+  if (id === 'lemari') return 0.42;
+  if (id === 'karpet' || id === 'batik') return 0;
+  return 0.32;
+}
+
+function clearHouseItemColliders() {
+  world.colliders = world.colliders.filter((c) => !c.houseItem);
+}
+
+function syncHouseFromSave() {
+  if (!world.houseFurnish) return;
+  while (world.houseFurnish.children.length) world.houseFurnish.remove(world.houseFurnish.children[0]);
+  clearHouseItemColliders();
+  for (const rec of (save.housePlaced || [])) {
+    if (!FURNITURE[rec.id]) continue;
+    const m = makeFurnitureMesh(rec.id);
+    const pos = gridToWorld(rec.gx, rec.gz);
+    m.position.set(pos.x, 0, pos.z);
+    m.rotation.y = rec.rot || 0;
+    if (rec.id === 'batik') {
+      // keep painting on the nearest wall
+      snapBatik(m, rec);
+    }
+    m.userData.placed = rec;
+    world.houseFurnish.add(m);
+    const r = furnitureRadius(rec.id);
+    if (r > 0) world.colliders.push({ x: pos.x, z: pos.z, r, houseItem: true });
+  }
+}
+
+function snapBatik(m, rec) {
+  const pos = gridToWorld(rec.gx, rec.gz);
+  const { cx, cz, hw, hd } = HOUSE_IN;
+  const dist = [
+    { wall: 'n', d: Math.abs(pos.z - (cz - hd)), x: pos.x, z: cz - hd + 0.12, rot: 0 },
+    { wall: 's', d: Math.abs(pos.z - (cz + hd)), x: pos.x, z: cz + hd - 0.12, rot: Math.PI },
+    { wall: 'w', d: Math.abs(pos.x - (cx - hw)), x: cx - hw + 0.12, z: pos.z, rot: Math.PI / 2 },
+    { wall: 'e', d: Math.abs(pos.x - (cx + hw)), x: cx + hw - 0.12, z: pos.z, rot: -Math.PI / 2 },
+  ];
+  dist.sort((a, b) => a.d - b.d);
+  const w = dist[0];
+  m.position.set(w.x, 0, w.z);
+  m.rotation.y = w.rot;
+}
+
+function cellTaken(gx, gz, ignore) {
+  return (save.housePlaced || []).some((p, i) => i !== ignore && p.gx === gx && p.gz === gz);
+}
+
+function enterHouse() {
+  if (world.inHouse) return;
+  closeFish();
+  closeDecor();
+  closeShop();
+  closeFx();
+  closeInv();
+  if (!ui.dialog.hidden) closeDialog();
+  world.inHouse = true;
+  const x = HOUSE_IN.cx;
+  const z = HOUSE_IN.cz + HOUSE_IN.hd - 1.15;
+  world.player.position.set(x, 0, z);
+  world.player.rotation.y = Math.PI;
+  world.camYaw = Math.PI;
+  world.camPitch = world.viewMode === 'first' ? 0 : 0.42;
+  snapCamera();
+  world.areaName = 'Rumah';
+  ui.area.textContent = 'Rumah';
+  if (save.quests.rumah === 'idle') {
+    persist({ quests: { ...save.quests, rumah: 'active' } });
+    showToast('Ini rumahmu. Beli perabot dan hias ruangan.');
+  } else {
+    showToast('Selamat datang di rumahmu.');
+  }
+}
+
+function exitHouse() {
+  if (!world.inHouse) return;
+  closeDecor();
+  world.inHouse = false;
+  const d = world.houseDoor || { x: PLAYER_HOUSE.x, z: PLAYER_HOUSE.z + 2.1 };
+  world.player.position.set(d.x, 0, d.z + 0.35);
+  world.player.rotation.y = 0;
+  world.camYaw = 0;
+  world.camPitch = world.viewMode === 'first' ? 0 : CAM_PITCH_TP;
+  snapCamera();
+  const area = areaAt(world.player.position.x, world.player.position.z);
+  world.areaName = area;
+  ui.area.textContent = area;
+  showToast('Kembali ke desa.');
+}
+
+function setInHouseFromPos() {
+  if (!world.player) return;
+  world.inHouse = inHouseInterior(world.player.position.x, world.player.position.z);
+}
+
+function nearFishSpot() {
+  if (!world.player || world.inHouse) return null;
+  const p = world.player.position;
+  let best = null, bestD = 99;
+  for (const s of FISH_SPOTS) {
+    const d = Math.hypot(p.x - s.x, p.z - s.z);
+    if (d <= s.r && d < bestD) { bestD = d; best = s; }
+  }
+  return best;
+}
+
+function sfxCast() { playNoiseBurst(0.16, 0.08, 700); playTone(220, 0.12, 'sine', 0.07); }
+function sfxBite() { playTone(660, 0.09, 'square', 0.07); playTone(880, 0.1, 'square', 0.05, 990); }
+function sfxCatch() { playTone(523, 0.1, 'sine', 0.08); playTone(659, 0.12, 'sine', 0.08); playTone(784, 0.16, 'sine', 0.09); }
+function sfxMiss() { playTone(220, 0.2, 'triangle', 0.07, 140); }
+
+function betterRod() { return !!(save.shop && save.shop.pancing); }
+
+function showFishBar(on, zone0, zone1, marker) {
+  if (!ui.fishBar) return;
+  ui.fishBar.hidden = !on;
+  if (!on) return;
+  const z0 = Math.max(0, zone0);
+  const z1 = Math.min(1, zone1);
+  ui.fishZone.style.left = (z0 * 100) + '%';
+  ui.fishZone.style.width = ((z1 - z0) * 100) + '%';
+  ui.fishMarker.style.left = (marker * 100) + '%';
+}
+
+function setFishUI() {
+  const f = world.fishing;
+  if (!f || !ui.fishPanel) return;
+  ui.fishTitle.textContent = 'Mancing · ' + f.spot.name;
+  if (f.phase === 'ready') {
+    ui.fishStatus.textContent = betterRod()
+      ? 'Pancing kuat siap. Lempar umpan, lalu tunggu hingga ikan menyambar.'
+      : 'Lempar pancing ke air, lalu tunggu umpan disambar.';
+    ui.btnFishMain.textContent = 'Lempar';
+    showFishBar(false);
+  } else if (f.phase === 'wait') {
+    ui.fishStatus.textContent = 'Umpan di air. Sabar, tunggu hingga ada yang menyambar...';
+    ui.btnFishMain.textContent = 'Menunggu';
+    showFishBar(false);
+  } else if (f.phase === 'bite') {
+    ui.fishStatus.textContent = 'Ada yang menyambar! Ketuk Tarik saat penanda berada di zona hijau.';
+    ui.btnFishMain.textContent = 'Tarik';
+    showFishBar(true, f.zone0, f.zone1, f.marker);
+  } else if (f.phase === 'result') {
+    showFishBar(false);
+    ui.btnFishMain.textContent = 'Lempar lagi';
+  }
+}
+
+function ensureBobber(spot) {
+  if (!world.bobber) {
+    const g = new THREE.Group();
+    g.add(mesh(new THREE.SphereGeometry(0.09, 8, 6), new THREE.MeshBasicMaterial({ color: 0xdc2626 }), 0, 0, 0));
+    g.add(mesh(new THREE.SphereGeometry(0.07, 8, 6), new THREE.MeshBasicMaterial({ color: 0xf5f0e6 }), 0, 0.07, 0));
+    world.scene.add(g);
+    world.bobber = g;
+  }
+  world.bobber.visible = true;
+  world.bobber.position.set(spot.waterX, spot.biome === 'beach' ? -0.18 : 0.1, spot.waterZ);
+}
+
+function hideBobber() {
+  if (world.bobber) world.bobber.visible = false;
+}
+
+function openFishing(spot) {
+  if (!world.playing || !ui.win.hidden) return;
+  if (!ui.dialog.hidden) closeDialog();
+  closeShop(); closeFx(); closeInv(); closeDecor();
+  world.fishing = {
+    active: true,
+    phase: 'ready',
+    spot,
+    t: 0,
+    wait: 0,
+    marker: 0.12,
+    dir: 1,
+    zone0: 0.4,
+    zone1: 0.62,
+    result: null,
+  };
+  world.blocked = true;
+  ui.controls.hidden = true;
+  ui.fishPanel.hidden = false;
+  setFishUI();
+  ensureBobber(spot);
+  hideBobber();
+}
+
+function closeFish() {
+  if (world.fishing) world.fishing.active = false;
+  world.fishing = null;
+  hideBobber();
+  if (ui.fishPanel) ui.fishPanel.hidden = true;
+  if (ui.decorPanel && !ui.decorPanel.hidden) return;
+  if ((!ui.fxPanel || ui.fxPanel.hidden) && ui.inv.hidden && (!ui.shopPanel || ui.shopPanel.hidden) && ui.dialog.hidden) {
+    world.blocked = false;
+    layoutControls();
+  }
+}
+
+function pickFish(biome) {
+  const rod = betterRod();
+  const pool = [];
+  let total = 0;
+  for (const id in FISH_TYPES) {
+    const ft = FISH_TYPES[id];
+    if (ft.biome !== biome) continue;
+    let w = ft.w;
+    if (rod && ft.rarity === 'langka') w *= 1.7;
+    else if (rod && ft.rarity === 'agak langka') w *= 1.25;
+    pool.push({ id, w });
+    total += w;
+  }
+  let r = Math.random() * total;
+  for (const p of pool) {
+    r -= p.w;
+    if (r <= 0) return p.id;
+  }
+  return pool[0].id;
+}
+
+function addCaughtFish(id) {
+  const bag = { ...(save.fishBag || {}) };
+  const log = { ...(save.fishLog || {}) };
+  bag[id] = (bag[id] || 0) + 1;
+  log[id] = (log[id] || 0) + 1;
+  persist({ fishBag: bag, fishLog: log, fishTotal: (save.fishTotal || 0) + 1 });
+}
+
+function startCast() {
+  const f = world.fishing;
+  if (!f || f.phase !== 'ready' && f.phase !== 'result') return;
+  f.phase = 'wait';
+  f.t = 0;
+  f.wait = (betterRod() ? 1.05 : 1.6) + Math.random() * (betterRod() ? 1.6 : 2.6);
+  f.result = null;
+  ensureBobber(f.spot);
+  sfxCast();
+  haptic(12);
+  setFishUI();
+}
+
+function startBite() {
+  const f = world.fishing;
+  if (!f) return;
+  ensureBobber(f.spot);
+  f.phase = 'bite';
+  f.t = 0;
+  const width = betterRod() ? 0.3 : 0.2;
+  f.zone0 = 0.18 + Math.random() * (0.7 - width);
+  f.zone1 = f.zone0 + width;
+  f.marker = Math.random() < 0.5 ? 0.06 : 0.94;
+  f.dir = f.marker < 0.5 ? 1 : -1;
+  f.biteWindow = betterRod() ? 2.7 : 2.15;
+  sfxBite();
+  haptic([18, 40, 24]);
+  setFishUI();
+}
+
+function resolveYank() {
+  const f = world.fishing;
+  if (!f || f.phase !== 'bite') return;
+  const hit = f.marker >= f.zone0 && f.marker <= f.zone1;
+  finishFishing(hit);
+}
+
+function finishFishing(ok) {
+  const f = world.fishing;
+  if (!f) return;
+  f.phase = 'result';
+  if (ok) {
+    const id = pickFish(f.spot.biome);
+    addCaughtFish(id);
+    const ft = FISH_TYPES[id];
+    f.result = id;
+    ui.fishStatus.textContent = 'Dapat ' + ft.name + ' (' + ft.rarity + ')! Bisa dijual ke Pak Dedi atau Toko Pasar.';
+    showToast('Ikan tertangkap: ' + ft.name);
+    sfxCatch();
+    haptic(30);
+  } else {
+    f.result = null;
+    ui.fishStatus.textContent = 'Ikan lepas! Coba lempar lagi, dan tarik saat penanda di zona hijau.';
+    showToast('Ikan lepas!');
+    sfxMiss();
+    haptic([8, 30, 8]);
+  }
+  hideBobber();
+  setFishUI();
+}
+
+function fishMainAction() {
+  const f = world.fishing;
+  if (!f || !f.active) return;
+  if (f.phase === 'ready' || f.phase === 'result') startCast();
+  else if (f.phase === 'wait') showToast('Sabar, umpan belum disambar.');
+  else if (f.phase === 'bite') resolveYank();
+}
+
+function updateFishing(dt) {
+  const f = world.fishing;
+  if (!f || !f.active) return;
+  if (f.phase === 'wait') {
+    f.t += dt;
+    if (world.bobber && world.bobber.visible) {
+      world.bobber.position.y = (f.spot.biome === 'beach' ? -0.18 : 0.1) + Math.sin(world.clock.elapsedTime * 3) * 0.03;
+    }
+    if (f.t >= f.wait) startBite();
+  } else if (f.phase === 'bite') {
+    f.t += dt;
+    const spd = betterRod() ? 1.15 : 1.45;
+    f.marker += f.dir * spd * dt;
+    if (f.marker >= 1) { f.marker = 1; f.dir = -1; }
+    if (f.marker <= 0) { f.marker = 0; f.dir = 1; }
+    showFishBar(true, f.zone0, f.zone1, f.marker);
+    if (f.t >= f.biteWindow) finishFishing(false);
+  }
+}
+
+function sellAllFish() {
+  const n = fishCount();
+  const v = fishValue();
+  if (!n) { showToast('Tidak ada ikan untuk dijual.'); return false; }
+  persist({ coins: save.coins + v, fishBag: {} });
+  showToast('Terjual ' + n + ' ikan, dapat ' + v + ' koin.');
+  sfxCoin();
+  haptic(18);
+  if (ui.shopPanel && !ui.shopPanel.hidden) renderShop();
+  return true;
+}
+
+function buyFurniture(id) {
+  const it = FURNITURE[id];
+  if (!it) return false;
+  if (it.needRare && !hasRareFish()) {
+    showToast('Tangkap ikan langka (gurame atau kakap) dulu.');
+    return false;
+  }
+  const owned = { ...(save.houseOwned || {}) };
+  if ((owned[id] || 0) >= (id === 'trophy' ? 1 : 3)) {
+    showToast('Sudah cukup ' + it.name + '.');
+    return false;
+  }
+  const total = Object.keys(owned).reduce((a, k) => a + (owned[k] || 0), 0);
+  if (total >= MAX_FURNITURE) { showToast('Rumah sudah penuh perabot.'); return false; }
+  if (save.coins < it.price) { showToast('Koin tidak cukup.'); return false; }
+  owned[id] = (owned[id] || 0) + 1;
+  persist({ coins: save.coins - it.price, houseOwned: owned });
+  showToast(it.name + ' terbeli.');
+  sfxCoin();
+  haptic(16);
+  if (ui.shopPanel && !ui.shopPanel.hidden) renderShop();
+  if (world.decorOpen) renderDecor();
+  return true;
+}
+
+function openDecor() {
+  if (!world.playing || !world.inHouse || !ui.win.hidden) return;
+  if (!ui.dialog.hidden) closeDialog();
+  closeShop(); closeFx(); closeInv();
+  world.decorOpen = true;
+  world.decorSel = world.decorSel || null;
+  ui.decorPanel.hidden = false;
+  renderDecor();
+}
+
+function closeDecor() {
+  world.decorOpen = false;
+  if (ui.decorPanel) ui.decorPanel.hidden = true;
+}
+
+function renderDecor() {
+  if (!ui.decorList) return;
+  if (ui.decorCoins) ui.decorCoins.textContent = String(save.coins);
+  ui.decorList.innerHTML = '';
+  Object.keys(FURNITURE).forEach((id) => {
+    const it = FURNITURE[id];
+    const free = ownedFree(id);
+    const owned = (save.houseOwned && save.houseOwned[id]) || 0;
+    const li = document.createElement('li');
+    if (world.decorSel === id) li.className = 'selected';
+    const left = document.createElement('div');
+    left.innerHTML = '<div class="decor-name">' + it.name + '</div><div class="decor-meta">' +
+      (owned ? ('Dimiliki ' + owned + ' · sisa ' + free) : it.price + ' koin') +
+      (it.needRare && !hasRareFish() ? ' · butuh ikan langka' : '') + '</div>';
+    li.appendChild(left);
+    li.addEventListener('click', (e) => {
+      if (e.target.closest('.decor-buy')) return;
+      if (free > 0) { world.decorSel = id; renderDecor(); }
+      else showToast('Beli ' + it.name + ' dulu.');
+    });
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'btn primary decor-buy';
+    b.textContent = 'Beli';
+    const locked = (it.needRare && !hasRareFish()) || save.coins < it.price || owned >= (id === 'trophy' ? 1 : 3);
+    b.disabled = locked;
+    b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); buyFurniture(id); });
+    li.appendChild(b);
+    ui.decorList.appendChild(li);
+  });
+}
+
+function placeSelectedFurniture() {
+  if (!world.inHouse) return;
+  const id = world.decorSel;
+  if (!id || ownedFree(id) <= 0) { showToast('Pilih perabot yang masih sisa.'); return; }
+  if (housePlacedCount() >= MAX_FURNITURE) { showToast('Tidak ada ruang lagi.'); return; }
+  const cell = playerGrid();
+  if (cellTaken(cell.gx, cell.gz)) { showToast('Petak ini sudah terisi.'); return; }
+  const placed = [...(save.housePlaced || []), { id, gx: cell.gx, gz: cell.gz, rot: 0 }];
+  persist({ housePlaced: placed });
+  syncHouseFromSave();
+  renderDecor();
+  showToast(FURNITURE[id].name + ' diletakkan.');
+  haptic(14);
+}
+
+function rotateFurnitureAtPlayer() {
+  if (!world.inHouse) return;
+  const cell = playerGrid();
+  const list = [...(save.housePlaced || [])];
+  const i = list.findIndex((p) => p.gx === cell.gx && p.gz === cell.gz);
+  if (i < 0) { showToast('Tidak ada perabot di depanmu.'); return; }
+  list[i] = { ...list[i], rot: (list[i].rot || 0) + Math.PI / 2 };
+  persist({ housePlaced: list });
+  syncHouseFromSave();
+  showToast('Perabot diputar.');
+}
+
+function pickFurnitureAtPlayer() {
+  if (!world.inHouse) return;
+  const cell = playerGrid();
+  const list = [...(save.housePlaced || [])];
+  const i = list.findIndex((p) => p.gx === cell.gx && p.gz === cell.gz);
+  if (i < 0) { showToast('Tidak ada perabot di depanmu.'); return; }
+  const id = list[i].id;
+  list.splice(i, 1);
+  persist({ housePlaced: list });
+  world.decorSel = id;
+  syncHouseFromSave();
+  if (world.decorOpen) renderDecor();
+  showToast(FURNITURE[id].name + ' diangkat.');
+}
+
+function furnishDemo(items) {
+  const placed = [];
+  for (const rec of items) {
+    if (!FURNITURE[rec.id]) continue;
+    const owned = { ...(save.houseOwned || {}) };
+    owned[rec.id] = (owned[rec.id] || 0) + 1;
+    save.houseOwned = owned;
+    placed.push({ id: rec.id, gx: rec.gx, gz: rec.gz, rot: rec.rot || 0 });
+  }
+  persist({ houseOwned: save.houseOwned, housePlaced: placed });
+  syncHouseFromSave();
+}
 
 function useWarung() {
   if (save.quests.udin === 'active' && save.inventory.includes('ikan')) {
@@ -3251,11 +4157,29 @@ function targetInteract() {
   if (roh) return { type: 'roh', obj: roh, label: 'Serang roh batu' };
   const slime = nearestOf(world.slimes, 1.9, (s) => s.userData.alive);
   if (slime) return { type: 'slime', obj: slime, label: 'Serang slime' };
+  if (world.inHouse) {
+    if (world.houseExit && dist2(world.player.position.x, world.player.position.z, world.houseExit.x, world.houseExit.z) < 1.25 * 1.25) {
+      return { type: 'house-exit', label: 'Keluar rumah' };
+    }
+    if (world.decorOpen) {
+      const cell = playerGrid();
+      if (cellTaken(cell.gx, cell.gz)) return { type: 'decor-here', label: 'Putar atau angkat perabot' };
+      if (world.decorSel && ownedFree(world.decorSel) > 0) return { type: 'decor-place', label: 'Letakkan ' + FURNITURE[world.decorSel].name };
+      return { type: 'decor', label: 'Pilih perabot di daftar' };
+    }
+    return { type: 'decor', label: 'Hias rumah' };
+  }
+  if (world.houseDoor && dist2(world.player.position.x, world.player.position.z, world.houseDoor.x, world.houseDoor.z) < 1.7 * 1.7) {
+    return { type: 'house-enter', label: 'Masuk rumah' };
+  }
+  const spot = nearFishSpot();
+  if (spot) return { type: 'fish', obj: spot, label: 'Mancing di ' + spot.name };
   return null;
 }
 
 function doAction() {
   if (!world.playing) return;
+  if (world.fishing && world.fishing.active) { fishMainAction(); return; }
   if (!ui.dialog.hidden) {
     const first = ui.dialogActions.querySelector('button');
     if (first) first.click();
@@ -3275,6 +4199,12 @@ function doAction() {
   else if (t.type === 'stone') touchStone(t.obj);
   else if (t.type === 'roh') attackRoh(t.obj);
   else if (t.type === 'slime') attackSlime(t.obj);
+  else if (t.type === 'house-enter') enterHouse();
+  else if (t.type === 'house-exit') exitHouse();
+  else if (t.type === 'fish') openFishing(t.obj);
+  else if (t.type === 'decor') openDecor();
+  else if (t.type === 'decor-place') placeSelectedFurniture();
+  else if (t.type === 'decor-here') rotateFurnitureAtPlayer();
 }
 
 function attackSlime(slime) {
@@ -3353,9 +4283,18 @@ function tryTakePusaka() {
   maybeWin();
 }
 
-function closeInv() { ui.inv.hidden = true; if (( !ui.fxPanel || ui.fxPanel.hidden) && (!ui.shopPanel || ui.shopPanel.hidden)) { world.blocked = false; layoutControls(); } }
+function uiBlocking() {
+  return !ui.dialog.hidden
+    || (ui.shopPanel && !ui.shopPanel.hidden)
+    || (ui.fxPanel && !ui.fxPanel.hidden)
+    || !ui.inv.hidden
+    || (ui.fishPanel && !ui.fishPanel.hidden)
+    || !ui.win.hidden;
+}
+function closeInv() { ui.inv.hidden = true; if (!uiBlocking()) { world.blocked = false; layoutControls(); } }
 function openInv() {
   if (!world.playing || !ui.dialog.hidden || !ui.win.hidden) return;
+  if (world.fishing && world.fishing.active) return;
   closeFx();
   closeShop();
   renderInventory();
@@ -3374,6 +4313,7 @@ function refreshFxButtons() {
 
 function openFx() {
   if (!world.playing || !ui.win.hidden) return;
+  if (world.fishing && world.fishing.active) return;
   if (!ui.dialog.hidden) closeDialog();
   ui.inv.hidden = true;
   closeShop();
@@ -3385,7 +4325,7 @@ function openFx() {
 
 function closeFx() {
   if (ui.fxPanel) ui.fxPanel.hidden = true;
-  if (ui.inv.hidden && (!ui.shopPanel || ui.shopPanel.hidden)) {
+  if (!uiBlocking()) {
     world.blocked = false;
     layoutControls();
   }
@@ -3600,14 +4540,20 @@ function updateCamera(dt) {
   }
   const yaw = world.camYaw;
   const pitch = world.camPitch;
-  const horiz = CAM_DIST * Math.cos(pitch);
+  const dist = world.inHouse ? 5.05 : CAM_DIST;
+  const horiz = dist * Math.cos(pitch);
   const destX = p.position.x - Math.sin(yaw) * horiz;
   const destZ = p.position.z - Math.cos(yaw) * horiz;
-  const destY = p.position.y + 1.25 + CAM_DIST * Math.sin(pitch);
+  let destY = p.position.y + 1.25 + dist * Math.sin(pitch);
+  if (world.inHouse) destY = Math.min(destY, 2.85);
   const k = world.camLook.active ? (1 - Math.exp(-16 * dt)) : (1 - Math.exp(-7 * dt));
   cam.position.x += (destX - cam.position.x) * k;
   cam.position.y += (destY - cam.position.y) * k;
   cam.position.z += (destZ - cam.position.z) * k;
+  if (world.inHouse) {
+    cam.position.x = Math.max(HOUSE_IN.cx - HOUSE_IN.hw + 0.35, Math.min(HOUSE_IN.cx + HOUSE_IN.hw - 0.35, cam.position.x));
+    cam.position.z = Math.max(HOUSE_IN.cz - HOUSE_IN.hd + 0.35, Math.min(HOUSE_IN.cz + HOUSE_IN.hd - 0.35, cam.position.z));
+  }
   cam.lookAt(p.position.x, p.position.y + 1.25, p.position.z);
   applyShake(dt);
 }
@@ -3639,12 +4585,19 @@ function snapCamera() {
   world.player.visible = true;
   const yaw = world.camYaw;
   const pitch = world.camPitch;
-  const horiz = CAM_DIST * Math.cos(pitch);
+  const dist = world.inHouse ? 5.05 : CAM_DIST;
+  const horiz = dist * Math.cos(pitch);
+  let cy = p.position.y + 1.25 + dist * Math.sin(pitch);
+  if (world.inHouse) cy = Math.min(cy, 2.85);
   cam.position.set(
     p.position.x - Math.sin(yaw) * horiz,
-    p.position.y + 1.25 + CAM_DIST * Math.sin(pitch),
+    cy,
     p.position.z - Math.cos(yaw) * horiz
   );
+  if (world.inHouse) {
+    cam.position.x = Math.max(HOUSE_IN.cx - HOUSE_IN.hw + 0.35, Math.min(HOUSE_IN.cx + HOUSE_IN.hw - 0.35, cam.position.x));
+    cam.position.z = Math.max(HOUSE_IN.cz - HOUSE_IN.hd + 0.35, Math.min(HOUSE_IN.cz + HOUSE_IN.hd - 0.35, cam.position.z));
+  }
   cam.lookAt(p.position.x, p.position.y + 1.25, p.position.z);
 }
 
@@ -3771,7 +4724,10 @@ function drawMinimap() {
   if (q.roh !== 'done') markNpc('andi', '#e8b84a');
   if (q.ayam !== 'done') markNpc('yanti', '#fb7185');
   if (q.surat !== 'done') markNpc('hasan', '#fb7185');
+  if (q.mancing !== 'done') markNpc('dedi', '#38bdf8');
   if (world.shopStall) dot(world.shopStall.position.x, world.shopStall.position.z, '#7dd3fc', 2.6);
+  if (world.houseDoor) dot(world.houseDoor.x, world.houseDoor.z, '#2dd4bf', 3);
+  for (const s of FISH_SPOTS) dot(s.x, s.z, '#38bdf8', 2.4);
   if (q.ayam === 'active') dot((KANDANG.x0 + KANDANG.x1) / 2, (KANDANG.z0 + KANDANG.z1) / 2, '#f97316', 3);
   if (q.surat === 'active') {
     for (const b of world.mailboxes) {
@@ -3815,6 +4771,7 @@ function tick() {
     updateCamera(dt);
     updateProps(dt);
     pickupNearby();
+    updateFishing(dt);
     world.mapT += dt;
     if (world.mapT > 0.12) { world.mapT = 0; drawMinimap(); }
 
@@ -3825,7 +4782,9 @@ function tick() {
       showToast('Wilayah: ' + area);
     }
 
-    if (!world.blocked && ui.dialog.hidden && ui.inv.hidden && ui.win.hidden) {
+    if (world.fishing && world.fishing.active) {
+      setPrompt('');
+    } else if (!world.blocked && ui.dialog.hidden && ui.inv.hidden && ui.win.hidden) {
       const t = targetInteract();
       setPrompt(t ? t.label : '');
     } else if (ui.dialog.hidden) {
@@ -3880,7 +4839,7 @@ function lookEnd() {
 
 function isLookTarget(el) {
   if (!el || !el.closest) return true;
-  return !el.closest('#joystick, #btn-action, #btn-sprint, #btn-inv, #btn-view, #btn-fx, #btn-inv-close, #btn-shop-close, #dialog, #inventory, #fx-panel, #shop-panel, #minimap, #title-screen, #win-screen, .btn, .chip, .panel, .overlay, a, button');
+  return !el.closest('#joystick, #btn-action, #btn-sprint, #btn-inv, #btn-view, #btn-fx, #btn-inv-close, #btn-shop-close, #btn-fish-main, #btn-fish-cancel, #btn-decor-place, #btn-decor-rot, #btn-decor-pick, #btn-decor-close, #dialog, #inventory, #fx-panel, #shop-panel, #fish-panel, #decor-panel, #minimap, #title-screen, #win-screen, .btn, .chip, .panel, .overlay, a, button');
 }
 
 function applyLookDelta(dx, dy) {
@@ -3953,6 +4912,12 @@ function setupControls() {
   if (ui.fxSound) ui.fxSound.addEventListener('click', (e) => { e.preventDefault(); setSound(!save.sound); });
   if (ui.fxVib) ui.fxVib.addEventListener('click', (e) => { e.preventDefault(); setVibrate(!save.vibrate); });
   if (ui.btnShopClose) ui.btnShopClose.addEventListener('click', (e) => { e.preventDefault(); closeShop(); });
+  if (ui.btnFishMain) ui.btnFishMain.addEventListener('click', (e) => { e.preventDefault(); fishMainAction(); });
+  if (ui.btnFishCancel) ui.btnFishCancel.addEventListener('click', (e) => { e.preventDefault(); closeFish(); });
+  if (ui.btnDecorPlace) ui.btnDecorPlace.addEventListener('click', (e) => { e.preventDefault(); placeSelectedFurniture(); });
+  if (ui.btnDecorRot) ui.btnDecorRot.addEventListener('click', (e) => { e.preventDefault(); rotateFurnitureAtPlayer(); });
+  if (ui.btnDecorPick) ui.btnDecorPick.addEventListener('click', (e) => { e.preventDefault(); pickFurnitureAtPlayer(); });
+  if (ui.btnDecorClose) ui.btnDecorClose.addEventListener('click', (e) => { e.preventDefault(); closeDecor(); });
   if (ui.btnSprint) {
     const sprintOn = (e) => { e.preventDefault(); world.sprintHeld = true; ui.btnSprint.classList.add('held'); };
     const sprintOff = (e) => { if (e) e.preventDefault(); world.sprintHeld = false; ui.btnSprint.classList.remove('held'); };
@@ -3978,8 +4943,18 @@ function setupControls() {
     if (e.code === 'KeyI' && !e.repeat) {
       if (ui.inv.hidden) openInv(); else closeInv();
     }
+    if (e.code === 'KeyF' && !e.repeat && world.decorOpen) {
+      e.preventDefault();
+      rotateFurnitureAtPlayer();
+    }
+    if (e.code === 'KeyX' && !e.repeat && world.decorOpen) {
+      e.preventDefault();
+      pickFurnitureAtPlayer();
+    }
     if (e.code === 'Escape') {
-      if (ui.shopPanel && !ui.shopPanel.hidden) closeShop();
+      if (world.fishing && world.fishing.active) closeFish();
+      else if (world.decorOpen) closeDecor();
+      else if (ui.shopPanel && !ui.shopPanel.hidden) closeShop();
       else if (ui.fxPanel && !ui.fxPanel.hidden) closeFx();
       else if (!ui.inv.hidden) closeInv();
       else if (!ui.dialog.hidden) closeDialog();
@@ -4025,14 +5000,7 @@ function showTitle() {
 function startGame(cont) {
   if (cont) {
     const loaded = loadSave();
-    save = loaded ? {
-      ...defaultSave(),
-      ...loaded,
-      quests: { ...defaultSave().quests, ...(loaded.quests || {}) },
-      shop: { ...defaultSave().shop, ...(loaded.shop || {}) },
-      letters: { ...defaultSave().letters, ...(loaded.letters || {}) },
-      ayamCaught: { ...(loaded.ayamCaught || {}) },
-    } : defaultSave();
+    save = loaded ? mergeSave(loaded) : defaultSave();
     if (save.won && (save.quests.ayam !== 'done' || save.quests.surat !== 'done')) {
       save.won = false;
       save.migratedVillage = true;
@@ -4087,6 +5055,10 @@ function startGame(cont) {
   applyPlayerGear();
   closeShop();
   closeFx();
+  closeFish();
+  closeDecor();
+  setInHouseFromPos();
+  syncHouseFromSave();
 
   world.playing = true;
   world.blocked = false;
@@ -4103,7 +5075,10 @@ function startGame(cont) {
   setView(save.view || 'third');
   layoutControls();
 
-  if (save.migratedFromV1) {
+  if (save.migratedFromV2) {
+    showToast('Fitur baru: mancing di kolam atau pantai, dan hias rumahmu di desa.');
+    persist({ migratedFromV2: false });
+  } else if (save.migratedFromV1) {
     showToast('Wilayah baru terbuka di utara: Sawah dan Gunung.');
     persist({ migratedFromV1: false });
   } else if (save.migratedVillage) {
@@ -4244,6 +5219,35 @@ function boot() {
       captureAyam: captureAllAyam,
       deliverLetter,
       deliverAllLetters,
+      startFish(id) {
+        const s = FISH_SPOTS.find((x) => x.id === id) || FISH_SPOTS[0];
+        window.__pn.setPos(s.x, s.z, 0);
+        openFishing(s);
+      },
+      fishCast: startCast,
+      fishYank: resolveYank,
+      forceCatch() { if (world.fishing && world.fishing.active) finishFishing(true); },
+      setFishMarker(v) { if (world.fishing) { world.fishing.marker = v; if (world.fishing.phase === 'bite') showFishBar(true, world.fishing.zone0, world.fishing.zone1, v); } },
+      fishState() { return world.fishing ? { ...world.fishing, spot: world.fishing.spot && world.fishing.spot.id } : null; },
+      forceBite() { if (world.fishing && world.fishing.active) startBite(); },
+      closeFish,
+      sellAllFish,
+      enterHouse,
+      exitHouse,
+      openDecor,
+      closeDecor,
+      buyFurniture,
+      placeFurniture(id, gx, gz, rot) {
+        const owned = { ...(save.houseOwned || {}) };
+        owned[id] = Math.max(owned[id] || 0, ((save.housePlaced || []).filter((p) => p.id === id).length + 1));
+        const placed = (save.housePlaced || []).filter((p) => !(p.gx === gx && p.gz === gz));
+        placed.push({ id, gx, gz, rot: rot || 0 });
+        persist({ houseOwned: owned, housePlaced: placed });
+        syncHouseFromSave();
+      },
+      furnishDemo,
+      getFish() { return { bag: { ...save.fishBag }, log: { ...save.fishLog }, total: save.fishTotal || 0, types: fishLogCount(), value: fishValue() }; },
+      getHouse() { return { inHouse: !!world.inHouse, owned: { ...save.houseOwned }, placed: [...(save.housePlaced || [])], decorOpen: !!world.decorOpen }; },
       setSprint(v) { world.sprintHeld = !!v; },
       overviewVillage(on) { world.overview = on !== false; if (!world.overview) snapCamera(); },
       getVillage() {
@@ -4267,6 +5271,11 @@ function boot() {
           },
           shopOpen: !!(ui.shopPanel && !ui.shopPanel.hidden),
           minimap: !!(ui.minimap && !ui.hud.hidden),
+          fishTotal: save.fishTotal || 0,
+          fishTypes: fishLogCount(),
+          inHouse: !!world.inHouse,
+          housePlaced: housePlacedCount(),
+          fishing: !!(world.fishing && world.fishing.active),
         };
       },
     };
