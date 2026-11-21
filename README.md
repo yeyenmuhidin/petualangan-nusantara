@@ -12,8 +12,8 @@ python3 -m http.server 8080
 
 Lalu buka `http://localhost:8080`.
 
-- **HP:** tuas virtual di kiri, tombol **Aksi** di kanan.
-- **Komputer:** WASD atau panah untuk jalan, **Spasi** atau **E** untuk aksi, **I** untuk tas.
+- **HP:** tuas virtual di kiri (dorong ke atas = jalan lurus menjauh dari kamera), tombol **Aksi** di kanan. Geser satu jari di sisi kanan layar untuk memutar kamera. Tombol **Pandangan** untuk ganti ke pandangan mata karakter.
+- **Komputer:** WASD atau panah untuk jalan, **Spasi** atau **E** untuk aksi, **Q/R** untuk putar kamera, **V** untuk ganti pandangan, seret mouse, **I** untuk tas.
 
 ## Wilayah
 

@@ -8,6 +8,16 @@ const ISLAND_R = 36;
 const WALK_R = 33.5;
 const PLAYER_SPEED = 7.2;
 const PIXEL_CAP = 1.5;
+const JOY_DEAD = 0.16;
+const JOY_SNAP = 0.28;
+const JOY_SMOOTH = 14;
+const JOY_KNOB_TRAVEL = 46;
+const CAM_DIST = 8.2;
+const CAM_PITCH_TP = 0.48;
+const CAM_TURN = 1.9;
+const LOOK_SENS_YAW = 0.0052;
+const LOOK_SENS_PITCH = 0.0036;
+
 const START = { x: 0.4, z: -5.2, rot: Math.PI };
 const ITEM_NAMES = {
   keranjang: 'Keranjang Bu Sari',
@@ -107,6 +117,7 @@ function defaultSave() {
     rohDefeated: 0,
     pusakaTaken: false,
     migratedFromV1: false,
+    view: 'third',
     px: START.x,
     pz: START.z,
     rot: START.rot,
@@ -167,6 +178,7 @@ const ui = {
   btnContinue: $('btn-continue'),
   btnNew: $('btn-new'),
   btnInv: $('btn-inv'),
+  btnView: $('btn-view'),
   btnInvClose: $('btn-inv-close'),
   btnAgain: $('btn-again'),
   btnKeep: $('btn-keep'),
@@ -197,12 +209,16 @@ const world = {
   keys: new Set(),
   inputX: 0,
   inputY: 0,
-  joy: { active: false, pointerId: null, x: 0, y: 0 },
+  joy: { active: false, pointerId: null, rawX: 0, rawY: 0, x: 0, y: 0 },
   attackT: 0,
   saveT: 0,
   toastT: 0,
   areaName: 'Desa',
-  camYaw: 0,
+  camYaw: START.rot,
+  camPitch: CAM_PITCH_TP,
+  camLook: { active: false, pointerId: null, lastX: 0, lastY: 0 },
+  camManualT: 0,
+  viewMode: 'third',
   attackAnim: 0,
 };
 
@@ -1786,36 +1802,76 @@ function resolveCollisions(prevX, prevZ) {
   p.y = groundHeight(p.x, p.z);
 }
 
+function lerpAngle(a, b, t) {
+  let d = b - a;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return a + d * Math.min(1, Math.max(0, t));
+}
+
+function smoothStick(dt) {
+  const k = 1 - Math.exp(-JOY_SMOOTH * dt);
+  const j = world.joy;
+  j.x += (j.rawX - j.x) * k;
+  j.y += (j.rawY - j.y) * k;
+}
+
+function stickInput() {
+  let x = world.joy.x;
+  let y = world.joy.y;
+  const mag = Math.hypot(x, y);
+  if (mag < JOY_DEAD) return { ix: 0, iy: 0, len: 0 };
+  const scaled = (mag - JOY_DEAD) / (1 - JOY_DEAD);
+  x = (x / mag) * Math.min(1, scaled);
+  y = (y / mag) * Math.min(1, scaled);
+  // If the thumb is mostly up or down, ignore slight sideways drift
+  const ang = Math.atan2(x, -y);
+  if (Math.abs(ang) < JOY_SNAP && -y > 0.2) x = 0;
+  if (Math.abs(Math.abs(ang) - Math.PI) < JOY_SNAP && y > 0.2) x = 0;
+  const len = Math.hypot(x, y);
+  return { ix: x, iy: -y, len };
+}
+
 function updatePlayer(dt) {
-  if (world.blocked) return 0;
-  let ix = world.joy.x;
-  let iy = -world.joy.y;
-  if (world.keys.has('KeyW') || world.keys.has('ArrowUp')) iy += 1;
-  if (world.keys.has('KeyS') || world.keys.has('ArrowDown')) iy -= 1;
-  if (world.keys.has('KeyA') || world.keys.has('ArrowLeft')) ix -= 1;
-  if (world.keys.has('KeyD') || world.keys.has('ArrowRight')) ix += 1;
-  const len = Math.hypot(ix, iy);
-  if (len > 1) { ix /= len; iy /= len; }
-  if (len < 0.08) {
+  if (world.blocked) {
     world.player.position.y = groundHeight(world.player.position.x, world.player.position.z);
     idleLimbs(dt);
     return 0;
   }
+  smoothStick(dt);
+  let { ix, iy, len } = stickInput();
+  if (world.keys.has('KeyW') || world.keys.has('ArrowUp')) iy += 1;
+  if (world.keys.has('KeyS') || world.keys.has('ArrowDown')) iy -= 1;
+  if (world.keys.has('KeyA') || world.keys.has('ArrowLeft')) ix -= 1;
+  if (world.keys.has('KeyD') || world.keys.has('ArrowRight')) ix += 1;
+  const rawLen = Math.hypot(ix, iy);
+  if (rawLen > 1) { ix /= rawLen; iy /= rawLen; len = 1; }
+  else len = rawLen;
+  if (len < 0.06) {
+    world.player.position.y = groundHeight(world.player.position.x, world.player.position.z);
+    if (world.viewMode === 'first') world.player.rotation.y = world.camYaw;
+    idleLimbs(dt);
+    return 0;
+  }
 
-  const cam = world.camera;
-  const lookX = world.player.position.x - cam.position.x;
-  const lookZ = world.player.position.z - cam.position.z;
-  const l = Math.hypot(lookX, lookZ) || 1;
-  const fx = lookX / l, fz = lookZ / l;
+  // Camera-relative: stick up = walk straight away from the camera / along look yaw
+  const yaw = world.camYaw;
+  const fx = Math.sin(yaw), fz = Math.cos(yaw);
   const rx = fz, rz = -fx;
-  const mx = (fx * iy + rx * ix);
-  const mz = (fz * iy + rz * ix);
+  const mx = fx * iy + rx * ix;
+  const mz = fz * iy + rz * ix;
   const speed = PLAYER_SPEED * Math.min(1, len);
   const prevX = world.player.position.x;
   const prevZ = world.player.position.z;
   world.player.position.x += mx * speed * dt;
   world.player.position.z += mz * speed * dt;
-  world.player.rotation.y = Math.atan2(mx, mz);
+  if (world.viewMode === 'first') {
+    world.player.rotation.y = world.camYaw;
+  } else {
+    const target = Math.atan2(mx, mz);
+    const turn = 1 - Math.exp(-10 * dt);
+    world.player.rotation.y = lerpAngle(world.player.rotation.y, target, turn);
+  }
   resolveCollisions(prevX, prevZ);
   walkLimbs(dt, len);
   return len;
@@ -1842,19 +1898,121 @@ function idleLimbs(dt) {
   legR.rotation.x += (0 - legR.rotation.x) * damp;
 }
 
+function applyLookKeys(dt) {
+  let yaw = 0;
+  if (world.keys.has('KeyQ')) yaw += 1;
+  if (world.keys.has('KeyR')) yaw -= 1;
+  if (yaw) {
+    world.camYaw += yaw * CAM_TURN * dt;
+    world.camManualT = 0.45;
+  }
+}
+
 function updateCamera(dt) {
+  applyLookKeys(dt);
+  if (world.camManualT > 0) world.camManualT = Math.max(0, world.camManualT - dt);
   const p = world.player;
-  const dist = 8.2;
-  const height = 5.4;
-  const destX = p.position.x - Math.sin(p.rotation.y) * dist;
-  const destZ = p.position.z - Math.cos(p.rotation.y) * dist;
-  const destY = p.position.y + height;
-  const k = 1 - Math.pow(0.0008, dt);
   const cam = world.camera;
+  const moving = world.playing && !world.blocked;
+
+  if (world.viewMode === 'first') {
+    world.player.visible = false;
+    const eye = 1.52;
+    const yaw = world.camYaw;
+    const pitch = world.camPitch;
+    const destX = p.position.x + Math.sin(yaw) * 0.18;
+    const destZ = p.position.z + Math.cos(yaw) * 0.18;
+    const destY = p.position.y + eye;
+    const k = 1 - Math.exp(-18 * dt);
+    cam.position.x += (destX - cam.position.x) * k;
+    cam.position.y += (destY - cam.position.y) * k;
+    cam.position.z += (destZ - cam.position.z) * k;
+    cam.lookAt(
+      cam.position.x + Math.sin(yaw) * Math.cos(pitch),
+      cam.position.y + Math.sin(pitch),
+      cam.position.z + Math.cos(yaw) * Math.cos(pitch)
+    );
+    return;
+  }
+
+  world.player.visible = true;
+  // Auto-follow behind the player while walking, unless the player is looking around
+  if (moving && world.camManualT <= 0 && !world.camLook.active) {
+    const j = stickInput();
+    let iy = j.iy;
+    if (world.keys.has('KeyW') || world.keys.has('ArrowUp')) iy += 1;
+    if (world.keys.has('KeyS') || world.keys.has('ArrowDown')) iy -= 1;
+    if (iy > 0.25) {
+      const follow = 1 - Math.exp(-1.6 * dt);
+      world.camYaw = lerpAngle(world.camYaw, world.player.rotation.y, follow);
+    }
+  }
+  const yaw = world.camYaw;
+  const pitch = world.camPitch;
+  const horiz = CAM_DIST * Math.cos(pitch);
+  const destX = p.position.x - Math.sin(yaw) * horiz;
+  const destZ = p.position.z - Math.cos(yaw) * horiz;
+  const destY = p.position.y + 1.25 + CAM_DIST * Math.sin(pitch);
+  const k = world.camLook.active ? (1 - Math.exp(-16 * dt)) : (1 - Math.exp(-7 * dt));
   cam.position.x += (destX - cam.position.x) * k;
   cam.position.y += (destY - cam.position.y) * k;
   cam.position.z += (destZ - cam.position.z) * k;
   cam.lookAt(p.position.x, p.position.y + 1.25, p.position.z);
+}
+
+function snapCamera() {
+  const p = world.player;
+  const cam = world.camera;
+  if (world.viewMode === 'first') {
+    world.player.visible = false;
+    const yaw = world.camYaw;
+    const pitch = world.camPitch;
+    cam.position.set(p.position.x + Math.sin(yaw) * 0.18, p.position.y + 1.52, p.position.z + Math.cos(yaw) * 0.18);
+    cam.lookAt(
+      cam.position.x + Math.sin(yaw) * Math.cos(pitch),
+      cam.position.y + Math.sin(pitch),
+      cam.position.z + Math.cos(yaw) * Math.cos(pitch)
+    );
+    return;
+  }
+  world.player.visible = true;
+  const yaw = world.camYaw;
+  const pitch = world.camPitch;
+  const horiz = CAM_DIST * Math.cos(pitch);
+  cam.position.set(
+    p.position.x - Math.sin(yaw) * horiz,
+    p.position.y + 1.25 + CAM_DIST * Math.sin(pitch),
+    p.position.z - Math.cos(yaw) * horiz
+  );
+  cam.lookAt(p.position.x, p.position.y + 1.25, p.position.z);
+}
+
+function setView(mode) {
+  world.viewMode = mode === 'first' ? 'first' : 'third';
+  if (world.viewMode === 'first') {
+    if (Math.abs(world.camPitch - CAM_PITCH_TP) < 0.2 || world.camPitch > 0.3) world.camPitch = 0;
+    world.camPitch = Math.max(-0.7, Math.min(0.6, world.camPitch));
+  } else {
+    if (Math.abs(world.camPitch) < 0.25) world.camPitch = CAM_PITCH_TP;
+    world.camPitch = Math.max(0.12, Math.min(0.78, world.camPitch));
+  }
+  if (world.player) {
+    world.player.visible = world.viewMode !== 'first';
+    if (world.viewMode === 'first') world.player.rotation.y = world.camYaw;
+  }
+  if (ui.btnView) {
+    ui.btnView.setAttribute('aria-pressed', world.viewMode === 'first' ? 'true' : 'false');
+    ui.btnView.title = world.viewMode === 'first' ? 'Ubah ke pandangan belakang' : 'Ubah ke pandangan mata karakter';
+  }
+  if (world.playing) {
+    snapCamera();
+    persist({ view: world.viewMode });
+  }
+}
+
+function toggleView() {
+  if (!world.playing) return;
+  setView(world.viewMode === 'first' ? 'third' : 'first');
 }
 
 function updateProps(dt) {
@@ -1955,24 +2113,45 @@ function joyPos(clientX, clientY) {
   let y = (clientY - cy) / (rect.height * 0.5);
   const l = Math.hypot(x, y);
   if (l > 1) { x /= l; y /= l; }
-  world.joy.x = x;
-  world.joy.y = y;
-  ui.joyKnob.style.transform = 'translate(' + (x * 32) + 'px,' + (y * 32) + 'px)';
+  world.joy.rawX = x;
+  world.joy.rawY = y;
+  ui.joyKnob.style.transform = 'translate(' + (x * JOY_KNOB_TRAVEL) + 'px,' + (y * JOY_KNOB_TRAVEL) + 'px)';
 }
 
 function joyEnd() {
   world.joy.active = false;
   world.joy.pointerId = null;
-  world.joy.x = 0;
-  world.joy.y = 0;
+  world.joy.rawX = 0;
+  world.joy.rawY = 0;
   ui.joyKnob.style.transform = 'translate(0,0)';
+}
+
+function lookEnd() {
+  world.camLook.active = false;
+  world.camLook.pointerId = null;
+}
+
+function isLookTarget(el) {
+  if (!el || !el.closest) return true;
+  return !el.closest('#joystick, #btn-action, #btn-inv, #btn-view, #btn-inv-close, #dialog, #inventory, #title-screen, #win-screen, .btn, .chip, .panel, .overlay, a, button');
+}
+
+function applyLookDelta(dx, dy) {
+  world.camYaw -= dx * LOOK_SENS_YAW;
+  world.camPitch -= dy * LOOK_SENS_PITCH;
+  if (world.viewMode === 'first') {
+    world.camPitch = Math.max(-0.7, Math.min(0.6, world.camPitch));
+  } else {
+    world.camPitch = Math.max(0.12, Math.min(0.78, world.camPitch));
+  }
+  world.camManualT = 0.55;
 }
 
 function setupControls() {
   ui.joy.addEventListener('pointerdown', (e) => {
     if (!world.playing || world.blocked) return;
     e.preventDefault();
-    ui.joy.setPointerCapture(e.pointerId);
+    try { ui.joy.setPointerCapture(e.pointerId); } catch (err) { /* synthetic or inactive pointer */ }
     world.joy.active = true;
     world.joy.pointerId = e.pointerId;
     joyPos(e.clientX, e.clientY);
@@ -1989,17 +2168,49 @@ function setupControls() {
   ui.joy.addEventListener('pointerup', up);
   ui.joy.addEventListener('pointercancel', up);
 
+  const onLookDown = (e) => {
+    if (!world.playing || world.blocked) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    if (e.pointerId === world.joy.pointerId) return;
+    if (!isLookTarget(e.target)) return;
+    world.camLook.active = true;
+    world.camLook.pointerId = e.pointerId;
+    world.camLook.lastX = e.clientX;
+    world.camLook.lastY = e.clientY;
+    try { e.target.setPointerCapture && e.target.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+  };
+  const onLookMove = (e) => {
+    if (!world.camLook.active || e.pointerId !== world.camLook.pointerId) return;
+    e.preventDefault();
+    applyLookDelta(e.clientX - world.camLook.lastX, e.clientY - world.camLook.lastY);
+    world.camLook.lastX = e.clientX;
+    world.camLook.lastY = e.clientY;
+  };
+  const onLookUp = (e) => {
+    if (e.pointerId !== world.camLook.pointerId) return;
+    lookEnd();
+  };
+  document.addEventListener('pointerdown', onLookDown);
+  document.addEventListener('pointermove', onLookMove);
+  document.addEventListener('pointerup', onLookUp);
+  document.addEventListener('pointercancel', onLookUp);
+
   ui.action.addEventListener('pointerup', (e) => {
     e.preventDefault();
     doAction();
   });
   ui.action.addEventListener('click', (e) => e.preventDefault());
+  if (ui.btnView) ui.btnView.addEventListener('click', (e) => { e.preventDefault(); toggleView(); });
 
   window.addEventListener('keydown', (e) => {
     world.keys.add(e.code);
     if (e.code === 'Space' || e.code === 'KeyE') {
       e.preventDefault();
       if (!e.repeat) doAction();
+    }
+    if (e.code === 'KeyV' && !e.repeat) {
+      e.preventDefault();
+      toggleView();
     }
     if (e.code === 'KeyI' && !e.repeat) {
       if (ui.inv.hidden) openInv(); else closeInv();
@@ -2015,7 +2226,7 @@ function setupControls() {
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) world.clock.getDelta();
   });
-  window.addEventListener('blur', () => { world.keys.clear(); joyEnd(); });
+  window.addEventListener('blur', () => { world.keys.clear(); joyEnd(); lookEnd(); });
 
   ui.btnStart.addEventListener('click', () => startGame(false));
   ui.btnContinue.addEventListener('click', () => startGame(true));
@@ -2073,14 +2284,11 @@ function startGame(cont) {
   const gy = groundHeight(save.px, save.pz);
   world.player.position.set(save.px, gy, save.pz);
   world.player.rotation.y = save.rot;
-  // snap camera behind
-  const dist = 8.2;
-  world.camera.position.set(
-    save.px - Math.sin(save.rot) * dist,
-    gy + 5.4,
-    save.pz - Math.cos(save.rot) * dist
-  );
-  world.camera.lookAt(save.px, gy + 1.25, save.pz);
+  world.camYaw = save.rot;
+  world.camPitch = (save.view === 'first') ? 0 : CAM_PITCH_TP;
+  world.camManualT = 0;
+  joyEnd();
+  lookEnd();
 
   // apply collected/defeated from save
   for (const c of world.coins) c.visible = !save.collectedCoins[c.userData.id];
@@ -2112,6 +2320,7 @@ function startGame(cont) {
   ui.inv.hidden = true;
   closeDialog();
   refreshHud();
+  setView(save.view || 'third');
   layoutControls();
 
   if (save.migratedFromV1) {
@@ -2137,11 +2346,42 @@ function boot() {
       setPos(x, z, rot) {
         const gy = groundHeight(x, z);
         world.player.position.set(x, gy, z);
-        if (rot != null) world.player.rotation.y = rot;
-        const dist = 8.2;
-        world.camera.position.set(x - Math.sin(world.player.rotation.y) * dist, gy + 5.4, z - Math.cos(world.player.rotation.y) * dist);
-        world.camera.lookAt(x, gy + 1.25, z);
+        if (rot != null) {
+          world.player.rotation.y = rot;
+          world.camYaw = rot;
+        }
+        snapCamera();
       },
+      setJoy(x, y) {
+        world.joy.rawX = x;
+        world.joy.rawY = y;
+        world.joy.x = x;
+        world.joy.y = y;
+      },
+      clearJoy() {
+        joyEnd();
+        world.joy.x = 0;
+        world.joy.y = 0;
+      },
+      setCamYaw(a) { world.camYaw = a; world.camManualT = 1; snapCamera(); },
+      getCam() {
+        return {
+          yaw: world.camYaw,
+          pitch: world.camPitch,
+          view: world.viewMode,
+          visible: world.player.visible,
+          px: world.player.position.x,
+          py: world.player.position.y,
+          pz: world.player.position.z,
+          rot: world.player.rotation.y,
+          camX: world.camera.position.x,
+          camY: world.camera.position.y,
+          camZ: world.camera.position.z,
+        };
+      },
+      setView,
+      toggleView,
+      snapCamera,
       talk(id) { const n = world.npcs.find((p) => p.userData.id === id); if (n) talkTo(n); },
       action: doAction,
       save: () => JSON.parse(JSON.stringify(save)),
