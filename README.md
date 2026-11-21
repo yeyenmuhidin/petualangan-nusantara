@@ -32,4 +32,6 @@ Desa, Hutan, Pantai, Gua, plus wilayah baru di utara: **Sawah** (lewat jembatan 
 
 Progres tersimpan otomatis di `localStorage` (kunci `petualangan-nusantara-v2`; data lama dari v1 ikut dipindahkan). Tidak ada iklan atau pembayaran.
 
+Tombol **Efek** mengatur suara (dibuat lewat Web Audio, tanpa berkas audio) dan getar. Ada siklus siang-malam, hujan atau angin sesekali, dan getaran saat koin, misi selesai, atau terkena slime/roh.
+
 Three.js r170 ikut dalam folder (`three.module.js`), tanpa CDN saat permainan dijalankan.

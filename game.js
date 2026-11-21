@@ -118,6 +118,8 @@ function defaultSave() {
     pusakaTaken: false,
     migratedFromV1: false,
     view: 'third',
+    sound: true,
+    vibrate: true,
     px: START.x,
     pz: START.z,
     rot: START.rot,
@@ -179,6 +181,11 @@ const ui = {
   btnNew: $('btn-new'),
   btnInv: $('btn-inv'),
   btnView: $('btn-view'),
+  btnFx: $('btn-fx'),
+  fxPanel: $('fx-panel'),
+  fxSound: $('fx-sound'),
+  fxVib: $('fx-vib'),
+  fxClose: $('fx-close'),
   btnInvClose: $('btn-inv-close'),
   btnAgain: $('btn-again'),
   btnKeep: $('btn-keep'),
@@ -220,6 +227,23 @@ const world = {
   camManualT: 0,
   viewMode: 'third',
   attackAnim: 0,
+  tod: 0.32,
+  weather: 'clear',
+  weatherT: 0,
+  weatherDur: 90 + Math.random() * 80,
+  rainAmt: 0,
+  windAmt: 0.18,
+  shake: 0,
+  hitCD: 0,
+  stepT: 0,
+  hemi: null,
+  sun: null,
+  sunBall: null,
+  moonBall: null,
+  lamps: [],
+  swayers: [],
+  rain: null,
+  leaves: null,
 };
 
 let save = defaultSave();
@@ -468,20 +492,38 @@ function buildIsland() {
   world.scene.add(ring);
 }
 
-function placeInstanced(geo, material, points, yOf) {
+function placeInstanced(geo, material, points, yOf, sway) {
   const inst = new THREE.InstancedMesh(geo, material, points.length);
   const dummy = new THREE.Object3D();
+  const bases = [];
   for (let i = 0; i < points.length; i++) {
     const p = points[i];
-    dummy.position.set(p.x, yOf ? yOf(p) : p.y, p.z);
-    dummy.rotation.set(p.rx || 0, p.ry || 0, p.rz || 0);
     const s = p.s || 1;
-    dummy.scale.set(s * (p.sx || 1), s * (p.sy || 1), s * (p.sz || 1));
+    const rec = {
+      x: p.x,
+      y: yOf ? yOf(p) : p.y,
+      z: p.z,
+      rx: p.rx || 0,
+      ry: p.ry || 0,
+      rz: p.rz || 0,
+      sx: s * (p.sx || 1),
+      sy: s * (p.sy || 1),
+      sz: s * (p.sz || 1),
+      phase: seeded(i + 19) * Math.PI * 2,
+    };
+    dummy.position.set(rec.x, rec.y, rec.z);
+    dummy.rotation.set(rec.rx, rec.ry, rec.rz);
+    dummy.scale.set(rec.sx, rec.sy, rec.sz);
     dummy.updateMatrix();
     inst.setMatrixAt(i, dummy.matrix);
+    bases.push(rec);
   }
   inst.instanceMatrix.needsUpdate = true;
+  inst.userData.bases = bases;
+  inst.userData.sway = sway || null;
+  inst.userData.dummy = dummy;
   world.scene.add(inst);
+  if (sway) world.swayers.push(inst);
   return inst;
 }
 
@@ -523,9 +565,9 @@ function buildTrees() {
     tryAdd(x, z, 0.85 + seeded(k + 41) * 0.5, false);
   }
 
-  placeInstanced(new THREE.BoxGeometry(0.32, 1.4, 0.32), mat(0x6b3f1d), trunks, (p) => p.y);
-  placeInstanced(new THREE.BoxGeometry(1.5, 1.3, 1.5), mat(0x1f7a3a), leaves, (p) => p.y);
-  placeInstanced(new THREE.BoxGeometry(1.1, 1.0, 1.1), mat(0x2e9a48), leaves2, (p) => p.y);
+  placeInstanced(new THREE.BoxGeometry(0.32, 1.4, 0.32), mat(0x6b3f1d), trunks, (p) => p.y, 'tree');
+  placeInstanced(new THREE.BoxGeometry(1.5, 1.3, 1.5), mat(0x1f7a3a), leaves, (p) => p.y, 'canopy');
+  placeInstanced(new THREE.BoxGeometry(1.1, 1.0, 1.1), mat(0x2e9a48), leaves2, (p) => p.y, 'canopy');
 
   // palms on the beach
   const palms = [];
@@ -537,7 +579,7 @@ function buildTrees() {
     palms.push({ x, z, y: 1.35 * s, s, rz: (seeded(n) - 0.5) * 0.15 });
     addCollider(x, z, 0.35);
   });
-  placeInstanced(new THREE.CylinderGeometry(0.12, 0.2, 2.6, 6), mat(0x8a5a2b), palms, (p) => p.y);
+  placeInstanced(new THREE.CylinderGeometry(0.12, 0.2, 2.6, 6), mat(0x8a5a2b), palms, (p) => p.y, 'palm');
   const palmFronds = [];
   palmSpots.forEach(([x, z], n) => {
     const s = 0.95 + seeded(n + 70) * 0.25;
@@ -551,7 +593,7 @@ function buildTrees() {
       });
     }
   });
-  placeInstanced(new THREE.BoxGeometry(2.1, 0.18, 0.7), mat(0x1c7c3a), palmFronds, (p) => p.y);
+  placeInstanced(new THREE.BoxGeometry(2.1, 0.18, 0.7), mat(0x1c7c3a), palmFronds, (p) => p.y, 'frond');
 }
 
 function buildRocksAndGrass() {
@@ -581,7 +623,7 @@ function buildRocksAndGrass() {
     if (z > 12) continue;
     tufts.push({ x, z, y: 0.18, s: 0.4 + seeded(k) * 0.4, ry: seeded(k + 3) * Math.PI });
   }
-  placeInstanced(new THREE.ConeGeometry(0.18, 0.4, 5), mat(0x3d9a45), tufts, (p) => p.y);
+  placeInstanced(new THREE.ConeGeometry(0.18, 0.4, 5), mat(0x3d9a45), tufts, (p) => p.y, 'grass');
 }
 
 function buildVillage() {
@@ -622,6 +664,10 @@ function buildVillage() {
   makeSign('HUTAN', 11.5, -6, Math.PI / 2);
   makeSign('PANTAI', 1.2, 12.2, 0);
   makeSign('GUA', -14.2, 3.5, -Math.PI / 2);
+  makeLamp(1.7, -7.1, 2.4);
+  makeLamp(-4.4, -8.6, 2.3);
+  makeLamp(4.1, -4.2, 2.25);
+  makeLamp(-1.1, -12.2, 2.35);
 }
 
 function buildBeach() {
@@ -753,7 +799,7 @@ function buildSawah() {
     });
   }
   if (stalks.length) {
-    placeInstanced(new THREE.ConeGeometry(0.12, 0.7, 5), mat(0xc5dc6a), stalks, (p) => p.y * (p.sy || 1));
+    placeInstanced(new THREE.ConeGeometry(0.12, 0.7, 5), mat(0xc5dc6a), stalks, (p) => p.y * (p.sy || 1), 'stalk');
   }
 
   // farmer hut
@@ -1034,14 +1080,454 @@ function spawnRohs() {
   });
 }
 
+function makeLamp(x, z, h) {
+  h = h || 2.35;
+  const g = new THREE.Group();
+  g.add(mesh(new THREE.CylinderGeometry(0.07, 0.1, h, 6), 0x3f2f22, 0, h / 2, 0));
+  g.add(mesh(new THREE.BoxGeometry(0.28, 0.08, 0.28), 0x5c4330, 0, h + 0.02, 0));
+  const glow = new THREE.Mesh(
+    new THREE.SphereGeometry(0.18, 8, 6),
+    new THREE.MeshBasicMaterial({ color: 0xffc266, transparent: true, opacity: 0 })
+  );
+  glow.position.y = h + 0.16;
+  g.add(glow);
+  const halo = new THREE.Mesh(
+    new THREE.SphereGeometry(0.38, 8, 6),
+    new THREE.MeshBasicMaterial({ color: 0xffb347, transparent: true, opacity: 0, depthWrite: false })
+  );
+  halo.position.y = h + 0.16;
+  g.add(halo);
+  const light = new THREE.PointLight(0xffb040, 0, 10, 2);
+  light.position.y = h + 0.16;
+  g.add(light);
+  g.position.set(x, 0, z);
+  world.scene.add(g);
+  addCollider(x, z, 0.22);
+  world.lamps.push({ glow, halo, light });
+  return g;
+}
+
 function buildLights() {
   const hemi = new THREE.HemisphereLight(0xc9e8f5, 0x7a5a28, 0.95);
   world.scene.add(hemi);
+  world.hemi = hemi;
   const sun = new THREE.DirectionalLight(0xfff1c9, 0.95);
   sun.position.set(28, 42, 18);
   world.scene.add(sun);
+  world.sun = sun;
   const sunBall = mesh(new THREE.SphereGeometry(2.2, 8, 8), new THREE.MeshBasicMaterial({ color: 0xffe08a }), 40, 28, 22);
   world.scene.add(sunBall);
+  world.sunBall = sunBall;
+  const moonBall = mesh(new THREE.SphereGeometry(1.6, 8, 8), new THREE.MeshBasicMaterial({ color: 0xd9e7ff }), -40, 24, -16);
+  moonBall.visible = false;
+  world.scene.add(moonBall);
+  world.moonBall = moonBall;
+}
+
+function buildParticles() {
+  const rainN = 80;
+  const rainGeo = new THREE.BufferGeometry();
+  const rainPos = new Float32Array(rainN * 2 * 3);
+  rainGeo.setAttribute('position', new THREE.BufferAttribute(rainPos, 3));
+  const rainMat = new THREE.LineBasicMaterial({ color: 0xb9d4e6, transparent: true, opacity: 0, depthWrite: false });
+  const rainMesh = new THREE.LineSegments(rainGeo, rainMat);
+  rainMesh.frustumCulled = false;
+  rainMesh.visible = false;
+  world.scene.add(rainMesh);
+  const drops = [];
+  for (let i = 0; i < rainN; i++) {
+    drops.push({
+      x: (Math.random() - 0.5) * 28,
+      y: Math.random() * 14,
+      z: (Math.random() - 0.5) * 28,
+      v: 11 + Math.random() * 7,
+    });
+  }
+  world.rain = { mesh: rainMesh, pos: rainPos, drops };
+
+  const leafN = 32;
+  const leafGeo = new THREE.BoxGeometry(0.2, 0.04, 0.12);
+  const leafMat = new THREE.MeshLambertMaterial({ color: 0x5a8a3a });
+  const leafMesh = new THREE.InstancedMesh(leafGeo, leafMat, leafN);
+  leafMesh.frustumCulled = false;
+  leafMesh.visible = false;
+  const leafData = [];
+  for (let i = 0; i < leafN; i++) {
+    leafData.push({
+      x: (Math.random() - 0.5) * 24,
+      y: 1 + Math.random() * 6,
+      z: (Math.random() - 0.5) * 24,
+      vx: 0.6 + Math.random() * 1.4,
+      vy: -0.2 - Math.random() * 0.4,
+      phase: Math.random() * Math.PI * 2,
+      spin: 1 + Math.random() * 2,
+    });
+  }
+  world.scene.add(leafMesh);
+  world.leaves = { mesh: leafMesh, data: leafData, dummy: new THREE.Object3D() };
+}
+
+const DAY_CYCLE = 300;
+const SKY = {
+  night: new THREE.Color(0x0b1730),
+  dawn: new THREE.Color(0xf0a878),
+  day: new THREE.Color(0x7ec4d8),
+  dusk: new THREE.Color(0xe0955a),
+  rain: new THREE.Color(0x4a5d6c),
+};
+
+function dayFactor() {
+  const a = Math.cos((world.tod - 0.5) * Math.PI * 2);
+  return Math.max(0, Math.min(1, a * 0.55 + 0.45));
+}
+
+function skyColorAt(tod, rainAmt) {
+  const c = new THREE.Color();
+  const t = ((tod % 1) + 1) % 1;
+  if (t < 0.18) c.copy(SKY.night);
+  else if (t < 0.28) c.copy(SKY.night).lerp(SKY.dawn, (t - 0.18) / 0.1);
+  else if (t < 0.36) c.copy(SKY.dawn).lerp(SKY.day, (t - 0.28) / 0.08);
+  else if (t < 0.64) c.copy(SKY.day);
+  else if (t < 0.74) c.copy(SKY.day).lerp(SKY.dusk, (t - 0.64) / 0.1);
+  else if (t < 0.84) c.copy(SKY.dusk).lerp(SKY.night, (t - 0.74) / 0.1);
+  else c.copy(SKY.night);
+  if (rainAmt > 0.01) c.lerp(SKY.rain, rainAmt * 0.7);
+  return c;
+}
+
+function pickWeather() {
+  const r = Math.random();
+  if (r < 0.38) return 'rain';
+  if (r < 0.7) return 'wind';
+  return 'clear';
+}
+
+function setWeather(kind) {
+  world.weather = kind === 'rain' || kind === 'wind' ? kind : 'clear';
+  world.weatherDur = world.weather === 'clear' ? 80 + Math.random() * 90 : 35 + Math.random() * 35;
+  world.weatherT = 0;
+}
+
+function updateSway(dt) {
+  const t = world.clock.elapsedTime;
+  const ampBase = 0.16 + world.windAmt * 0.7;
+  if (ampBase < 0.03) return;
+  for (const inst of world.swayers) {
+    const dummy = inst.userData.dummy;
+    const kind = inst.userData.sway;
+    let mul = 1;
+    if (kind === 'tree' || kind === 'palm') mul = 0.45;
+    else if (kind === 'canopy' || kind === 'frond') mul = 1.15;
+    else if (kind === 'grass' || kind === 'stalk') mul = 1.35;
+    const amp = ampBase * mul;
+    const bases = inst.userData.bases;
+    for (let i = 0; i < bases.length; i++) {
+      const b = bases[i];
+      const w = Math.sin(t * (1.2 + (kind === 'grass' ? 1.1 : 0.3)) + b.phase) * amp;
+      dummy.position.set(b.x, b.y, b.z);
+      dummy.rotation.set(b.rx + w * 0.25, b.ry, b.rz + w);
+      dummy.scale.set(b.sx, b.sy, b.sz);
+      dummy.updateMatrix();
+      inst.setMatrixAt(i, dummy.matrix);
+    }
+    inst.instanceMatrix.needsUpdate = true;
+  }
+}
+
+function updateParticles(dt) {
+  const cam = world.camera;
+  const cx = cam ? cam.position.x : 0;
+  const cz = cam ? cam.position.z : 0;
+  if (world.rain && world.rainAmt > 0.04) {
+    const { mesh, pos, drops } = world.rain;
+    mesh.visible = true;
+    mesh.material.opacity = 0.35 + world.rainAmt * 0.4;
+    const lean = 0.35 + world.windAmt * 0.5;
+    for (let i = 0; i < drops.length; i++) {
+      const d = drops[i];
+      d.y -= d.v * dt;
+      d.x += lean * 3 * dt;
+      if (d.y < 0) {
+        d.y = 8 + Math.random() * 8;
+        d.x = cx + (Math.random() - 0.5) * 26;
+        d.z = cz + (Math.random() - 0.5) * 26;
+      }
+      const o = i * 6;
+      pos[o] = d.x; pos[o + 1] = d.y; pos[o + 2] = d.z;
+      pos[o + 3] = d.x + lean * 0.25; pos[o + 4] = d.y + 0.7; pos[o + 5] = d.z;
+    }
+    mesh.geometry.attributes.position.needsUpdate = true;
+  } else if (world.rain) {
+    world.rain.mesh.visible = false;
+    world.rain.mesh.material.opacity = 0;
+  }
+
+  if (world.leaves && world.windAmt > 0.25) {
+    const { mesh, data, dummy } = world.leaves;
+    mesh.visible = true;
+    const t = world.clock.elapsedTime;
+    for (let i = 0; i < data.length; i++) {
+      const d = data[i];
+      d.x += (d.vx + world.windAmt) * dt;
+      d.y += d.vy * dt + Math.sin(t * 1.5 + d.phase) * 0.15 * dt;
+      d.z += Math.sin(t * 0.7 + d.phase) * 0.5 * dt;
+      if (d.y < 0.2 || d.x > cx + 16) {
+        d.x = cx - 8 - Math.random() * 6;
+        d.y = 1.5 + Math.random() * 6;
+        d.z = cz + (Math.random() - 0.5) * 20;
+      }
+      dummy.position.set(d.x, d.y, d.z);
+      dummy.rotation.set(t * d.spin, t * d.spin * 0.7, d.phase);
+      dummy.scale.setScalar(1);
+      dummy.updateMatrix();
+      mesh.setMatrixAt(i, dummy.matrix);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+  } else if (world.leaves) {
+    world.leaves.mesh.visible = false;
+  }
+}
+
+function updateAtmosphere(dt) {
+  world.tod = (world.tod + dt / DAY_CYCLE) % 1;
+  world.weatherT += dt;
+  if (world.weather === 'clear') {
+    if (world.weatherT > world.weatherDur) setWeather(pickWeather());
+  } else if (world.weatherT > world.weatherDur) {
+    setWeather('clear');
+    world.weatherDur = 90 + Math.random() * 100;
+  }
+  const rainT = world.weather === 'rain' ? 1 : 0;
+  const windT = (world.weather === 'wind' || world.weather === 'rain') ? 1 : 0.16;
+  const k = 1 - Math.exp(-1.15 * dt);
+  world.rainAmt += (rainT - world.rainAmt) * k;
+  world.windAmt += (windT - world.windAmt) * k;
+
+  const day = dayFactor();
+  const night = 1 - day;
+  const sky = skyColorAt(world.tod, world.rainAmt);
+  if (world.scene) {
+    world.scene.background.copy(sky);
+    world.scene.fog.color.copy(sky);
+    world.scene.fog.near = 48 + night * 18;
+    world.scene.fog.far = 140 - night * 20 - world.rainAmt * 18;
+  }
+  if (world.renderer) world.renderer.setClearColor(sky, 1);
+  if (world.hemi) {
+    world.hemi.color.set(night > 0.6 ? 0x6a7aa0 : 0xc9e8f5);
+    world.hemi.groundColor.set(night > 0.6 ? 0x1b1510 : 0x7a5a28);
+    world.hemi.intensity = 0.22 + day * 0.78;
+  }
+  const ang = world.tod * Math.PI * 2 - Math.PI / 2;
+  if (world.sun) {
+    world.sun.position.set(Math.cos(ang) * 52, Math.sin(ang) * 44, 20);
+    world.sun.color.set(day > 0.55 ? 0xfff1c9 : 0xffb070);
+    world.sun.intensity = Math.max(0, Math.sin(ang)) * (0.95 - world.rainAmt * 0.35);
+  }
+  if (world.sunBall) {
+    world.sunBall.position.copy(world.sun.position);
+    world.sunBall.visible = world.sun.position.y > 3;
+    world.sunBall.material.color.set(day > 0.55 ? 0xffe08a : 0xff9a4a);
+  }
+  if (world.moonBall) {
+    world.moonBall.position.set(-Math.cos(ang) * 48, -Math.sin(ang) * 38, -16);
+    world.moonBall.visible = world.moonBall.position.y > 4 && night > 0.35;
+  }
+  const lamp = Math.max(0, (night - 0.28) / 0.72);
+  for (const L of world.lamps) {
+    L.glow.material.opacity = lamp * 0.95;
+    L.halo.material.opacity = lamp * 0.28;
+    L.light.intensity = lamp * 1.15;
+  }
+  updateSway(dt);
+  updateParticles(dt);
+  updateAmbience(day, night, dt);
+}
+
+/* -------------------- audio + haptics -------------------- */
+const audio = {
+  ctx: null,
+  master: null,
+  rainGain: null,
+  windGain: null,
+  started: false,
+  birdT: 0.8,
+  cricketT: 0.4,
+  noiseBuf: null,
+};
+
+function audioReady() {
+  return !!(audio.started && audio.ctx && save.sound);
+}
+
+function unlockAudio() {
+  if (audio.started) {
+    if (audio.ctx && audio.ctx.state === 'suspended') audio.ctx.resume().catch(() => {});
+    return;
+  }
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    const ctx = new AC();
+    const master = ctx.createGain();
+    master.gain.value = save.sound ? 0.5 : 0;
+    master.connect(ctx.destination);
+    const n = ctx.sampleRate * 2;
+    const buf = ctx.createBuffer(1, n, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    let last = 0;
+    for (let i = 0; i < n; i++) {
+      last = (last + 0.02 * (Math.random() * 2 - 1)) / 1.02;
+      data[i] = last * 3.2;
+    }
+    function loopNoise(filterType, freq, q) {
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.loop = true;
+      const f = ctx.createBiquadFilter();
+      f.type = filterType;
+      f.frequency.value = freq;
+      if (q) f.Q.value = q;
+      const g = ctx.createGain();
+      g.gain.value = 0;
+      src.connect(f); f.connect(g); g.connect(master);
+      src.start();
+      return g;
+    }
+    audio.ctx = ctx;
+    audio.master = master;
+    audio.noiseBuf = buf;
+    audio.rainGain = loopNoise('highpass', 900, 0.7);
+    audio.windGain = loopNoise('lowpass', 380, 0.4);
+    audio.started = true;
+    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+  } catch (err) {
+    audio.started = false;
+  }
+}
+
+function applyMasterGain() {
+  if (!audio.master || !audio.ctx) return;
+  const v = save.sound ? 0.5 : 0;
+  try { audio.master.gain.setTargetAtTime(v, audio.ctx.currentTime, 0.04); } catch (err) { audio.master.gain.value = v; }
+}
+
+function playTone(freq, dur, type, vol, slide) {
+  if (!audioReady()) return;
+  try {
+    const ctx = audio.ctx;
+    const t = ctx.currentTime;
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.type = type || 'sine';
+    o.frequency.setValueAtTime(freq, t);
+    if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(40, slide), t + dur);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol || 0.12, t + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(audio.master);
+    o.start(t); o.stop(t + dur + 0.02);
+  } catch (err) { /* ignore */ }
+}
+
+function playNoiseBurst(dur, vol, freq) {
+  if (!audioReady() || !audio.noiseBuf) return;
+  try {
+    const ctx = audio.ctx;
+    const t = ctx.currentTime;
+    const src = ctx.createBufferSource();
+    src.buffer = audio.noiseBuf;
+    const f = ctx.createBiquadFilter();
+    f.type = 'bandpass';
+    f.frequency.value = freq || 400;
+    f.Q.value = 0.7;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(vol || 0.2, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(f); f.connect(g); g.connect(audio.master);
+    src.start(t); src.stop(t + dur + 0.02);
+  } catch (err) { /* ignore */ }
+}
+
+function sfxCoin() {
+  playTone(920, 0.08, 'sine', 0.11, 1400);
+  playTone(1380, 0.12, 'sine', 0.08);
+}
+
+function sfxHit() {
+  playNoiseBurst(0.16, 0.22, 220);
+  playTone(140, 0.14, 'square', 0.07, 70);
+}
+
+function sfxStep() {
+  playNoiseBurst(0.07, 0.07, 180 + Math.random() * 80);
+}
+
+function sfxQuest() {
+  playTone(523, 0.12, 'sine', 0.1);
+  setTimeout(() => playTone(659, 0.12, 'sine', 0.1), 90);
+  setTimeout(() => playTone(784, 0.2, 'sine', 0.12), 180);
+}
+
+function sfxBird() {
+  const f = 1600 + Math.random() * 1600;
+  playTone(f, 0.11 + Math.random() * 0.06, 'sine', 0.045, f * (0.65 + Math.random() * 0.5));
+}
+
+function sfxCricket() {
+  playTone(4200 + Math.random() * 1400, 0.03, 'square', 0.025);
+}
+
+function updateAmbience(day, night, dt) {
+  if (!audio.started || !audio.ctx) return;
+  const now = audio.ctx.currentTime;
+  const rainV = (save.sound ? world.rainAmt : 0) * 0.22;
+  const windV = (save.sound ? (world.weather === 'wind' ? 0.16 : world.rainAmt * 0.06) : 0) + (save.sound ? 0.02 : 0);
+  try {
+    if (audio.rainGain) audio.rainGain.gain.setTargetAtTime(rainV, now, 0.2);
+    if (audio.windGain) audio.windGain.gain.setTargetAtTime(windV, now, 0.25);
+  } catch (err) { /* ignore */ }
+  if (!audioReady()) return;
+  audio.birdT -= dt;
+  audio.cricketT -= dt;
+  if (day > 0.45 && world.rainAmt < 0.55 && audio.birdT <= 0) {
+    sfxBird();
+    if (Math.random() < 0.35) setTimeout(sfxBird, 80 + Math.random() * 120);
+    audio.birdT = 1.3 + Math.random() * 3.2;
+  }
+  if (night > 0.45 && audio.cricketT <= 0) {
+    sfxCricket();
+    audio.cricketT = 0.28 + Math.random() * 0.45;
+  }
+}
+
+function canVibrate() {
+  return !!(save.vibrate && typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function');
+}
+
+function haptic(pattern) {
+  if (!canVibrate()) return;
+  try { navigator.vibrate(pattern); } catch (err) { /* unsupported */ }
+}
+
+function onQuestComplete() {
+  haptic([40, 70, 40, 70, 90]);
+  sfxQuest();
+}
+
+function onPlayerHit() {
+  if (world.hitCD > 0) return;
+  world.hitCD = 1.05;
+  world.shake = 0.28;
+  haptic([30, 40, 45]);
+  sfxHit();
+}
+
+function checkEnemyHits() {
+  if (!world.playing || world.blocked || world.hitCD > 0) return;
+  const slime = nearestOf(world.slimes, 0.9, (s) => s.userData.alive);
+  const roh = nearestOf(world.rohs, 1.0, (s) => s.userData.alive);
+  if (slime || roh) onPlayerHit();
 }
 
 /* -------------------- entities -------------------- */
@@ -1193,6 +1679,7 @@ function spawnSlimes() {
 
 function buildWorld() {
   buildLights();
+  buildParticles();
   buildIsland();
   buildTrees();
   buildRocksAndGrass();
@@ -1347,7 +1834,7 @@ function talkKades() {
     ]);
   } else if (q === 'active') {
     openDialog('Pak Kades', 'Hebat! 10 koin sudah terkumpul. Terima kasih, desa kami jadi terbantu.', [
-      { label: 'Sama-sama', primary: true, fn: () => { persist({ quests: { ...save.quests, kades: 'done' } }); showToast('Misi Pak Kades selesai.'); closeDialog(); maybeWin(); } },
+      { label: 'Sama-sama', primary: true, fn: () => { persist({ quests: { ...save.quests, kades: 'done' } }); showToast('Misi Pak Kades selesai.'); closeDialog(); onQuestComplete(); maybeWin(); } },
     ]);
   } else {
     openDialog('Pak Kades', 'Terima kasih sudah membantu desa. Ada jembatan baru ke utara, menuju sawah dan gunung. Hutan di timur, pantai di selatan, dan gua di barat juga menanti.', [
@@ -1374,6 +1861,7 @@ function talkSari() {
         persist({ inventory: inv, quests: { ...save.quests, sari: 'done' } });
         showToast('Misi Bu Sari selesai.');
         closeDialog();
+        onQuestComplete();
         maybeWin();
       } },
     ]);
@@ -1458,6 +1946,7 @@ function talkTani() {
         persist({ inventory: inv, quests: { ...save.quests, tani: 'done' } });
         showToast('Misi Pak Tani selesai. Kau mendapat seikat padi.');
         closeDialog();
+        onQuestComplete();
         maybeWin();
       } },
     ]);
@@ -1490,6 +1979,7 @@ function talkRina() {
         persist({ quests: { ...save.quests, rina: 'done' } });
         showToast('Misi Mbak Rina selesai.');
         closeDialog();
+        onQuestComplete();
         maybeWin();
       } },
     ]);
@@ -1528,6 +2018,7 @@ function talkKarya() {
         persist({ inventory: inv, quests: { ...save.quests, prasasti: 'done' } });
         showToast('Misi prasasti selesai. Kau mendapat genta kuno.');
         closeDialog();
+        onQuestComplete();
         maybeWin();
       } },
     ]);
@@ -1567,6 +2058,7 @@ function useWarung() {
         persist({ inventory: save.inventory.filter((x) => x !== 'ikan'), quests: { ...save.quests, udin: 'done' } });
         showToast('Misi Nelayan Udin selesai.');
         closeDialog();
+        onQuestComplete();
         maybeWin();
       } },
     ]);
@@ -1595,6 +2087,7 @@ function tryTakeTreasure() {
   const inv = save.inventory.includes('harta') ? save.inventory : [...save.inventory, 'harta'];
   persist({ inventory: inv, treasureTaken: true, quests: { ...save.quests, gua: 'done' } });
   showToast('Harta karun didapat!');
+  onQuestComplete();
   maybeWin();
 }
 
@@ -1612,6 +2105,7 @@ function maybeWin() {
   world.blocked = true;
   ui.win.hidden = false;
   ui.controls.hidden = true;
+  haptic([50, 80, 50, 80, 50, 80, 120]);
 }
 
 /* -------------------- interaction -------------------- */
@@ -1640,6 +2134,8 @@ function pickupNearby() {
       const collected = { ...save.collectedCoins, [c.userData.id]: true };
       persist({ coins: save.coins + 1, collectedCoins: collected });
       showToast('Koin didapat! (' + save.coins + ')');
+      haptic(18);
+      sfxCoin();
     }
   }
   if (world.basket.visible && dist2(p.x, p.z, world.basket.position.x, world.basket.position.z) < 1.6 * 1.6) {
@@ -1711,6 +2207,9 @@ function attackSlime(slime) {
   const n = save.slimesDefeated + 1;
   persist({ defeatedSlimes: defeated, slimesDefeated: n });
   showToast('Slime kalah! (' + n + '/5)');
+  world.shake = Math.max(world.shake, 0.12);
+  haptic(15);
+  sfxHit();
   setTimeout(() => { slime.visible = false; }, 220);
 }
 
@@ -1725,6 +2224,9 @@ function attackRoh(roh) {
   const n = save.rohDefeated + 1;
   persist({ defeatedRoh: defeated, rohDefeated: n });
   showToast('Roh batu kalah! (' + n + '/4)');
+  world.shake = Math.max(world.shake, 0.14);
+  haptic(18);
+  sfxHit();
   setTimeout(() => { roh.visible = false; }, 220);
 }
 
@@ -1766,16 +2268,56 @@ function tryTakePusaka() {
   const inv = save.inventory.includes('pusaka') ? save.inventory : [...save.inventory, 'pusaka'];
   persist({ inventory: inv, pusakaTaken: true, quests: { ...save.quests, roh: 'done' } });
   showToast('Pusaka Nusantara didapat!');
+  onQuestComplete();
   maybeWin();
 }
 
-function closeInv() { ui.inv.hidden = true; world.blocked = false; layoutControls(); }
+function closeInv() { ui.inv.hidden = true; if (ui.fxPanel && ui.fxPanel.hidden) { world.blocked = false; layoutControls(); } }
 function openInv() {
   if (!world.playing || !ui.dialog.hidden || !ui.win.hidden) return;
+  closeFx();
   renderInventory();
   ui.inv.hidden = false;
   world.blocked = true;
   ui.controls.hidden = true;
+}
+
+function refreshFxButtons() {
+  if (!ui.fxSound || !ui.fxVib) return;
+  ui.fxSound.textContent = save.sound ? 'Nyala' : 'Mati';
+  ui.fxSound.classList.toggle('off', !save.sound);
+  ui.fxVib.textContent = save.vibrate ? 'Nyala' : 'Mati';
+  ui.fxVib.classList.toggle('off', !save.vibrate);
+}
+
+function openFx() {
+  if (!world.playing || !ui.win.hidden) return;
+  if (!ui.dialog.hidden) closeDialog();
+  ui.inv.hidden = true;
+  refreshFxButtons();
+  ui.fxPanel.hidden = false;
+  world.blocked = true;
+  ui.controls.hidden = true;
+}
+
+function closeFx() {
+  if (ui.fxPanel) ui.fxPanel.hidden = true;
+  if (ui.inv.hidden) {
+    world.blocked = false;
+    layoutControls();
+  }
+}
+
+function setSound(on) {
+  persist({ sound: !!on });
+  applyMasterGain();
+  refreshFxButtons();
+}
+
+function setVibrate(on) {
+  persist({ vibrate: !!on });
+  refreshFxButtons();
+  if (on) haptic(25);
 }
 
 /* -------------------- movement / camera -------------------- */
@@ -1874,6 +2416,11 @@ function updatePlayer(dt) {
   }
   resolveCollisions(prevX, prevZ);
   walkLimbs(dt, len);
+  world.stepT += dt * Math.min(1, len);
+  if (world.stepT > 0.38) {
+    world.stepT = 0;
+    sfxStep();
+  }
   return len;
 }
 
@@ -1932,6 +2479,7 @@ function updateCamera(dt) {
       cam.position.y + Math.sin(pitch),
       cam.position.z + Math.cos(yaw) * Math.cos(pitch)
     );
+    applyShake(dt);
     return;
   }
 
@@ -1958,6 +2506,16 @@ function updateCamera(dt) {
   cam.position.y += (destY - cam.position.y) * k;
   cam.position.z += (destZ - cam.position.z) * k;
   cam.lookAt(p.position.x, p.position.y + 1.25, p.position.z);
+  applyShake(dt);
+}
+
+function applyShake(dt) {
+  if (world.shake <= 0.001) { world.shake = 0; return; }
+  const s = world.shake;
+  const t = world.clock.elapsedTime;
+  world.camera.position.x += Math.sin(t * 47) * s;
+  world.camera.position.y += Math.cos(t * 61) * s * 0.65;
+  world.shake *= Math.exp(-7 * dt);
 }
 
 function snapCamera() {
@@ -2061,13 +2619,16 @@ function tick() {
   const dt = Math.min(0.05, world.clock.getDelta());
   if (world.attackT > 0) world.attackT -= dt;
   if (world.attackAnim > 0) world.attackAnim -= dt;
+  if (world.hitCD > 0) world.hitCD -= dt;
   if (world.toastT > 0) {
     world.toastT -= dt;
     if (world.toastT <= 0) ui.toast.hidden = true;
   }
+  updateAtmosphere(dt);
 
   if (world.playing && world.player) {
     updatePlayer(dt);
+    checkEnemyHits();
     updateCamera(dt);
     updateProps(dt);
     pickupNearby();
@@ -2133,7 +2694,7 @@ function lookEnd() {
 
 function isLookTarget(el) {
   if (!el || !el.closest) return true;
-  return !el.closest('#joystick, #btn-action, #btn-inv, #btn-view, #btn-inv-close, #dialog, #inventory, #title-screen, #win-screen, .btn, .chip, .panel, .overlay, a, button');
+  return !el.closest('#joystick, #btn-action, #btn-inv, #btn-view, #btn-fx, #btn-inv-close, #dialog, #inventory, #fx-panel, #title-screen, #win-screen, .btn, .chip, .panel, .overlay, a, button');
 }
 
 function applyLookDelta(dx, dy) {
@@ -2201,6 +2762,13 @@ function setupControls() {
   });
   ui.action.addEventListener('click', (e) => e.preventDefault());
   if (ui.btnView) ui.btnView.addEventListener('click', (e) => { e.preventDefault(); toggleView(); });
+  if (ui.btnFx) ui.btnFx.addEventListener('click', (e) => { e.preventDefault(); if (ui.fxPanel.hidden) openFx(); else closeFx(); });
+  if (ui.fxClose) ui.fxClose.addEventListener('click', (e) => { e.preventDefault(); closeFx(); });
+  if (ui.fxSound) ui.fxSound.addEventListener('click', (e) => { e.preventDefault(); setSound(!save.sound); });
+  if (ui.fxVib) ui.fxVib.addEventListener('click', (e) => { e.preventDefault(); setVibrate(!save.vibrate); });
+  const unlockOnce = () => unlockAudio();
+  window.addEventListener('pointerdown', unlockOnce);
+  window.addEventListener('keydown', unlockOnce);
 
   window.addEventListener('keydown', (e) => {
     world.keys.add(e.code);
@@ -2216,7 +2784,8 @@ function setupControls() {
       if (ui.inv.hidden) openInv(); else closeInv();
     }
     if (e.code === 'Escape') {
-      if (!ui.inv.hidden) closeInv();
+      if (ui.fxPanel && !ui.fxPanel.hidden) closeFx();
+      else if (!ui.inv.hidden) closeInv();
       else if (!ui.dialog.hidden) closeDialog();
     }
   });
@@ -2228,9 +2797,9 @@ function setupControls() {
   });
   window.addEventListener('blur', () => { world.keys.clear(); joyEnd(); lookEnd(); });
 
-  ui.btnStart.addEventListener('click', () => startGame(false));
-  ui.btnContinue.addEventListener('click', () => startGame(true));
-  ui.btnNew.addEventListener('click', () => startGame(false));
+  ui.btnStart.addEventListener('click', () => { unlockAudio(); startGame(false); });
+  ui.btnContinue.addEventListener('click', () => { unlockAudio(); startGame(true); });
+  ui.btnNew.addEventListener('click', () => { unlockAudio(); startGame(false); });
   ui.btnInv.addEventListener('click', openInv);
   ui.btnInvClose.addEventListener('click', closeInv);
   ui.btnAgain.addEventListener('click', () => {
@@ -2414,6 +2983,28 @@ function boot() {
       useWarung,
       walkable: isWalkable,
       height: groundHeight,
+      setTime(v) { world.tod = ((v % 1) + 1) % 1; updateAtmosphere(0); },
+      setWeather,
+      getEffects() {
+        return {
+          tod: world.tod,
+          day: dayFactor(),
+          weather: world.weather,
+          rainAmt: world.rainAmt,
+          windAmt: world.windAmt,
+          sound: save.sound,
+          vibrate: save.vibrate,
+          audioStarted: audio.started,
+          shake: world.shake,
+          lamp: world.lamps[0] ? world.lamps[0].light.intensity : 0,
+          rainVisible: !!(world.rain && world.rain.mesh.visible),
+        };
+      },
+      unlockAudio,
+      setSound,
+      setVibrate,
+      onPlayerHit,
+      onQuestComplete,
     };
   }
   requestAnimationFrame(tick);

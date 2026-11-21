@@ -361,3 +361,24 @@ h1 {
   .overlay { align-items: center; }
   #prompt { bottom: 88px; }
 }
+
+.fx-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 8px 0 12px;
+  font-size: 15px;
+  font-weight: 700;
+}
+.fx-row .btn {
+  width: auto;
+  min-width: 96px;
+  margin-top: 0;
+  padding: 8px 14px;
+}
+.fx-row .btn.off {
+  background: #ece4d4;
+  color: #5a7076;
+}
+#fx-panel h2 { margin-bottom: 6px; }
