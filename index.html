@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="theme-color" content="#0b3d4a" />
+  <meta name="description" content="Petualangan Nusantara — jelajahi pulau, bantu warga desa, dan temukan harta karun." />
+  <title>Petualangan Nusantara</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8F%9D%EF%B8%8F%3C/text%3E%3C/svg%3E" />
+</head>
+<body>
+  <div id="app">
+    <canvas id="c"></canvas>
+
+    <div id="title-screen" class="overlay">
+      <div class="title-card">
+        <p class="kicker">Permainan petualangan 3D</p>
+        <h1>Petualangan<br />Nusantara</h1>
+        <p class="tagline">Jelajahi pulau kecil, bantu warga desa, kalahkan slime, dan temukan harta karun di dalam gua.</p>
+        <button id="btn-start" class="btn primary" type="button">Mulai Petualangan</button>
+        <button id="btn-continue" class="btn" type="button" hidden>Lanjutkan</button>
+        <button id="btn-new" class="btn ghost" type="button" hidden>Mulai Baru</button>
+        <p class="hint-keys">HP: tuas virtual + tombol Aksi<br />Komputer: WASD atau panah, Aksi: Spasi atau E</p>
+      </div>
+    </div>
+
+    <div id="hud" hidden>
+      <div class="hud-top">
+        <div class="chip" id="chip-coin"><span class="chip-ico">●</span> Koin <strong id="coin-count">0</strong></div>
+        <div class="chip" id="chip-area">Desa</div>
+        <button id="btn-inv" class="chip btn-chip" type="button">Tas</button>
+      </div>
+      <div id="mission-box">
+        <div class="mission-title">Misi aktif</div>
+        <div id="mission-list"></div>
+      </div>
+      <div id="key-hint" hidden>WASD / panah untuk jalan · Spasi atau E untuk aksi</div>
+    </div>
+
+    <div id="inventory" class="panel" hidden>
+      <h2>Tas barang</h2>
+      <ul id="inv-list"></ul>
+      <button id="btn-inv-close" class="btn" type="button">Tutup</button>
+    </div>
+
+    <div id="dialog" hidden>
+      <div class="dialog-card">
+        <div class="dialog-name" id="dialog-name"></div>
+        <p id="dialog-text"></p>
+        <div class="dialog-actions" id="dialog-actions"></div>
+      </div>
+    </div>
+
+    <div id="toast" hidden></div>
+    <div id="prompt" hidden></div>
+
+    <div id="controls" hidden>
+      <div id="joystick" aria-hidden="true">
+        <div id="joy-base"><div id="joy-knob"></div></div>
+      </div>
+      <button id="btn-action" type="button">Aksi</button>
+    </div>
+
+    <div id="win-screen" class="overlay" hidden>
+      <div class="title-card win-card">
+        <p class="kicker">Misi selesai</p>
+        <h1>Selamat!</h1>
+        <p class="tagline">Kau telah menyelesaikan semua misi dan menemukan harta karun Pulau Nusantara.</p>
+        <button id="btn-again" class="btn primary" type="button">Main lagi</button>
+        <button id="btn-keep" class="btn ghost" type="button">Tetap jelajahi</button>
+      </div>
+    </div>
+  </div>
+  <script type="module" src="game.js"></script>
+</body>
+</html>
