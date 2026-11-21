@@ -382,3 +382,85 @@ h1 {
   color: #5a7076;
 }
 #fx-panel h2 { margin-bottom: 6px; }
+
+#chip-hearts { color: #b91c1c; letter-spacing: 0.06em; }
+#hearts { font-size: 14px; }
+
+#minimap {
+  pointer-events: none;
+  position: absolute;
+  left: calc(10px + var(--safe-l));
+  top: calc(52px + var(--safe-t));
+  width: 124px;
+  height: 124px;
+  border-radius: 16px;
+  background: rgba(12, 48, 58, 0.72);
+  box-shadow: 0 4px 14px rgba(6, 30, 36, 0.28);
+  border: 2px solid rgba(255, 248, 230, 0.55);
+}
+
+#shop-panel .shop-coins {
+  font-size: 14px;
+  margin-bottom: 8px;
+  color: #3d555c;
+}
+#shop-list { list-style: none; margin-bottom: 12px; max-height: min(48vh, 340px); overflow: auto; }
+#shop-list li {
+  background: #eef6f2;
+  border-radius: 12px;
+  padding: 10px 10px 8px;
+  margin-top: 8px;
+}
+#shop-list .shop-name { font-weight: 800; font-size: 14px; }
+#shop-list .shop-desc { font-size: 12px; color: #3d555c; margin: 3px 0 8px; }
+#shop-list .shop-buy {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+#shop-list .shop-buy .btn { width: auto; margin-top: 0; padding: 7px 12px; font-size: 13px; }
+#shop-list .owned { color: var(--leaf); font-size: 13px; font-weight: 800; }
+#shop-list .pricey { opacity: 0.7; }
+
+#btn-sprint {
+  pointer-events: auto;
+  position: absolute;
+  right: calc(118px + var(--safe-r));
+  bottom: calc(52px + var(--safe-b));
+  width: 68px;
+  height: 68px;
+  border-radius: 50%;
+  border: 0;
+  font: inherit;
+  font-weight: 800;
+  font-size: 13px;
+  color: #16323a;
+  background: radial-gradient(circle at 35% 30%, #e8f4ff, #7eb6d6 60%, #3d7ea0);
+  box-shadow: 0 7px 0 #2a5c74, 0 10px 20px rgba(6, 30, 36, 0.3);
+  cursor: pointer;
+}
+#btn-sprint:active, #btn-sprint.held { transform: translateY(3px); box-shadow: 0 4px 0 #2a5c74; }
+#stamina {
+  pointer-events: none;
+  position: absolute;
+  right: calc(118px + var(--safe-r));
+  bottom: calc(126px + var(--safe-b));
+  width: 68px;
+  height: 7px;
+  border-radius: 999px;
+  background: rgba(15, 59, 68, 0.45);
+  overflow: hidden;
+}
+#stamina-fill {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, #e8b84a, #2f9e68);
+  transform-origin: left center;
+}
+
+@media (max-width: 420px) {
+  #minimap { width: 100px; height: 100px; }
+  #mission-box { width: min(200px, 54vw); }
+}

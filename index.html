@@ -6,7 +6,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="theme-color" content="#0b3d4a" />
-  <meta name="description" content="Petualangan Nusantara — jelajahi pulau, sawah, dan gunung, bantu warga, dan temukan pusaka." />
+  <meta name="description" content="Petualangan Nusantara — jelajahi desa yang luas, pulau, sawah, dan gunung, bantu warga, dan temukan pusaka." />
   <title>Petualangan Nusantara</title>
   <link rel="stylesheet" href="style.css" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8F%9D%EF%B8%8F%3C/text%3E%3C/svg%3E" />
@@ -19,17 +19,18 @@
       <div class="title-card">
         <p class="kicker">Permainan petualangan 3D</p>
         <h1>Petualangan<br />Nusantara</h1>
-        <p class="tagline">Jelajahi pulau, bantu warga desa dan sawah, pecahkan teka-teki kuil, dan temukan pusaka di gunung.</p>
+        <p class="tagline">Jelajahi desa yang meriah, bantu warga, belanja di pasar, pecahkan teka-teki kuil, dan temukan pusaka di gunung.</p>
         <button id="btn-start" class="btn primary" type="button">Mulai Petualangan</button>
         <button id="btn-continue" class="btn" type="button" hidden>Lanjutkan</button>
         <button id="btn-new" class="btn ghost" type="button" hidden>Mulai Baru</button>
-        <p class="hint-keys">HP: tuas virtual + tombol Aksi · geser di sisi kanan untuk putar kamera<br />Komputer: WASD atau panah, Aksi: Spasi atau E, Q/R putar kamera, V ganti pandangan</p>
+        <p class="hint-keys">HP: tuas virtual + tombol Aksi dan Lari · geser di sisi kanan untuk putar kamera<br />Komputer: WASD atau panah, Lari: Shift, Aksi: Spasi atau E, Q/R putar kamera, V ganti pandangan</p>
       </div>
     </div>
 
     <div id="hud" hidden>
       <div class="hud-top">
         <div class="chip" id="chip-coin"><span class="chip-ico">●</span> Koin <strong id="coin-count">0</strong></div>
+        <div class="chip" id="chip-hearts" title="Nyawa"><span id="hearts">♥♥♥</span></div>
         <div class="chip" id="chip-area">Desa</div>
         <button id="btn-inv" class="chip btn-chip" type="button">Tas</button>
         <button id="btn-view" class="chip btn-chip" type="button" aria-pressed="false" title="Ubah ke pandangan mata karakter">Pandangan</button>
@@ -39,13 +40,21 @@
         <div class="mission-title">Misi aktif</div>
         <div id="mission-list"></div>
       </div>
-      <div id="key-hint" hidden>WASD / panah untuk jalan · Spasi atau E untuk aksi · Q/R putar kamera · V pandangan · seret mouse</div>
+      <div id="key-hint" hidden>WASD / panah untuk jalan · Shift lari · Spasi atau E untuk aksi · Q/R putar kamera · V pandangan · seret mouse</div>
+      <canvas id="minimap" width="168" height="168" aria-hidden="true"></canvas>
     </div>
 
     <div id="inventory" class="panel" hidden>
       <h2>Tas barang</h2>
       <ul id="inv-list"></ul>
       <button id="btn-inv-close" class="btn" type="button">Tutup</button>
+    </div>
+
+    <div id="shop-panel" class="panel" hidden>
+      <h2>Toko Pasar</h2>
+      <p class="shop-coins">Koin: <strong id="shop-coins">0</strong></p>
+      <ul id="shop-list"></ul>
+      <button id="btn-shop-close" class="btn" type="button">Tutup</button>
     </div>
 
     <div id="fx-panel" class="panel" hidden>
@@ -70,6 +79,8 @@
       <div id="joystick" aria-hidden="true">
         <div id="joy-base"><div id="joy-knob"></div></div>
       </div>
+      <button id="btn-sprint" type="button">Lari</button>
+      <div id="stamina"><i id="stamina-fill"></i></div>
       <button id="btn-action" type="button">Aksi</button>
     </div>
 
@@ -77,7 +88,7 @@
       <div class="title-card win-card">
         <p class="kicker">Misi selesai</p>
         <h1>Selamat!</h1>
-        <p class="tagline">Kau telah menyelesaikan semua misi, membantu warga sawah, dan menemukan Pusaka Nusantara di reruntuhan kuil.</p>
+        <p class="tagline">Kau telah menyelesaikan semua misi, membantu warga desa yang lebih ramai, dan menemukan Pusaka Nusantara di reruntuhan kuil.</p>
         <button id="btn-again" class="btn primary" type="button">Main lagi</button>
         <button id="btn-keep" class="btn ghost" type="button">Tetap jelajahi</button>
       </div>

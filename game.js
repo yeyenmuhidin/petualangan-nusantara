@@ -28,10 +28,22 @@ const ITEM_NAMES = {
   bekal: 'Bekal untuk Mbah Karya',
   genta: 'Genta kuno',
   pusaka: 'Pusaka Nusantara',
+  surat: 'Tiga surat desa',
+  sepatu: 'Sepatu lari',
+  topi: 'Topi anyaman',
+  jamu: 'Jamu hati',
+  lentera: 'Lentera kuningan',
 };
 const PUZZLE_ORDER = ['hijau', 'kuning', 'merah'];
 const SAWAH = { x: 0, z: -54, rx: 16, rz: 15 };
 const GUNUNG = { x: 24, z: -76, r: 13.8 };
+const KANDANG = { x0: -10.6, x1: -7.0, z0: 2.4, z1: 5.6 };
+const SHOP_ITEMS = [
+  { id: 'sepatu', name: 'Sepatu lari', price: 8, desc: 'Langkah jadi lebih kencang.' },
+  { id: 'topi', name: 'Topi anyaman', price: 5, desc: 'Topi anyaman untuk di kepala.' },
+  { id: 'jamu', name: 'Jamu hati', price: 6, desc: 'Tambah satu nyawa (hati).' },
+  { id: 'lentera', name: 'Lentera kuningan', price: 7, desc: 'Menerangi malam di sekitarmu.' },
+];
 
 const mats = new Map();
 function mat(color, extra = {}) {
@@ -104,6 +116,7 @@ function defaultSave() {
     quests: {
       kades: 'idle', sari: 'idle', udin: 'idle', gua: 'idle',
       tani: 'idle', rina: 'idle', prasasti: 'idle', roh: 'idle',
+      ayam: 'idle', surat: 'idle',
     },
     defeatedSlimes: {},
     slimesDefeated: 0,
@@ -120,6 +133,12 @@ function defaultSave() {
     view: 'third',
     sound: true,
     vibrate: true,
+    shop: { sepatu: false, topi: false, jamu: false, lentera: false },
+    letters: { rumah1: false, rumah2: false, rumah3: false },
+    ayamCaught: {},
+    hp: 3,
+    maxHp: 3,
+    migratedVillage: false,
     px: START.x,
     pz: START.z,
     rot: START.rot,
@@ -137,12 +156,23 @@ function loadSave() {
     }
     if (!raw) return null;
     const data = JSON.parse(raw);
-    const merged = { ...defaultSave(), ...data, quests: { ...defaultSave().quests, ...(data.quests || {}) } };
+    const merged = {
+      ...defaultSave(),
+      ...data,
+      quests: { ...defaultSave().quests, ...(data.quests || {}) },
+      shop: { ...defaultSave().shop, ...(data.shop || {}) },
+      letters: { ...defaultSave().letters, ...(data.letters || {}) },
+      ayamCaught: { ...(data.ayamCaught || {}) },
+    };
     if (migrated) {
       if (merged.won) merged.won = false;
       merged.migratedFromV1 = true;
-      writeSave(merged);
     }
+    if (merged.won && (merged.quests.ayam !== 'done' || merged.quests.surat !== 'done')) {
+      merged.won = false;
+      merged.migratedVillage = true;
+    }
+    if (migrated || merged.migratedVillage) writeSave(merged);
     return merged;
   } catch (err) {
     return null;
@@ -189,6 +219,15 @@ const ui = {
   btnInvClose: $('btn-inv-close'),
   btnAgain: $('btn-again'),
   btnKeep: $('btn-keep'),
+  btnSprint: $('btn-sprint'),
+  stamina: $('stamina'),
+  staminaFill: $('stamina-fill'),
+  hearts: $('hearts'),
+  minimap: $('minimap'),
+  shopPanel: $('shop-panel'),
+  shopList: $('shop-list'),
+  shopCoins: $('shop-coins'),
+  btnShopClose: $('btn-shop-close'),
 };
 
 const world = {
@@ -244,6 +283,17 @@ const world = {
   swayers: [],
   rain: null,
   leaves: null,
+  shopStall: null,
+  mailboxes: [],
+  lanternLight: null,
+  animals: { ayam: [], grazers: [], cats: [], birds: [], fish: [], flutters: [], fireflies: null },
+  flowers: [],
+  stamina: 1,
+  sprintHeld: false,
+  sprinting: false,
+  mapT: 0,
+  overview: false,
+  playerGear: { topi: null, lantern: null },
 };
 
 let save = defaultSave();
@@ -425,7 +475,7 @@ function biomeColor(x, z, target) {
   const shore = r > 28.5;
   const pantai = z > 11 || (z > 7 && r > 22);
   const gua = x < -14 && z > -8 && z < 16;
-  const hutan = x > 9 && z < 9;
+  const hutan = x > 12 && z < 9;
   if (shore || pantai) {
     const t = Math.min(1, Math.max(0, (r - 27) / 6));
     target.set(0xe2c97a).lerp(new THREE.Color(0xd4b56a), t);
@@ -441,9 +491,13 @@ function biomeColor(x, z, target) {
     target.set(0x2f7a38);
     return target;
   }
-  // village grass + dirt path near center
+  // village grass + dirt path near center, plus new streets
   const path = (Math.abs(x) < 1.05 && z > -34 && z < 11) ||
-    (Math.abs(z + 6.2) < 0.95 && x > -7 && x < 6.5);
+    (Math.abs(z + 6.2) < 0.95 && x > -7 && x < 11) ||
+    (Math.abs(z + 19.2) < 1.05 && x > -11 && x < 10) ||
+    (Math.abs(x + 10.2) < 0.95 && z > -20 && z < -8) ||
+    (Math.abs(x - 8.6) < 0.95 && z > -21 && z < 3) ||
+    (Math.abs(z - 2.4) < 0.85 && x > -9 && x < 1.5);
   if (path) {
     target.set(0x8b6b3e);
     return target;
@@ -540,8 +594,10 @@ function buildTrees() {
   const tryAdd = (x, z, s, palmy) => {
     const r = Math.hypot(x, z);
     if (r > 30 || r < 3) return;
-    // keep clearings: village square, basket, cave mouth, beach open
-    if (Math.hypot(x - 0, z + 6) < 9) return;
+    // keep clearings: expanded village, basket, cave mouth, beach open
+    const vx = x / 15.8;
+    const vz = (z + 9) / 17.4;
+    if (vx * vx + vz * vz < 1) return;
     if (Math.hypot(x - 20, z + 18) < 3.2) return;
     if (x < -12 && z > -6 && z < 16) return;
     if (z > 8) return;
@@ -626,11 +682,179 @@ function buildRocksAndGrass() {
   placeInstanced(new THREE.ConeGeometry(0.18, 0.4, 5), mat(0x3d9a45), tufts, (p) => p.y, 'grass');
 }
 
+function makeStall(x, z, rot, color, w = 2.15) {
+  const g = new THREE.Group();
+  g.add(mesh(new THREE.BoxGeometry(w, 0.65, 1.05), 0x8b5a2b, 0, 0.48, 0));
+  g.add(mesh(new THREE.BoxGeometry(0.1, 1.85, 0.1), 0x6b4a28, -w * 0.45, 1.05, -0.4));
+  g.add(mesh(new THREE.BoxGeometry(0.1, 1.85, 0.1), 0x6b4a28, w * 0.45, 1.05, -0.4));
+  g.add(mesh(new THREE.BoxGeometry(0.1, 1.85, 0.1), 0x6b4a28, -w * 0.45, 1.05, 0.4));
+  g.add(mesh(new THREE.BoxGeometry(0.1, 1.85, 0.1), 0x6b4a28, w * 0.45, 1.05, 0.4));
+  g.add(mesh(new THREE.BoxGeometry(w + 0.25, 0.08, 1.35), color, 0, 2.0, 0));
+  g.add(mesh(new THREE.BoxGeometry(0.42, 0.22, 0.3), 0xf5f0e6, -0.4, 0.9, 0.12));
+  g.add(mesh(new THREE.BoxGeometry(0.34, 0.18, 0.28), 0x16a34a, 0.4, 0.88, 0.1));
+  g.position.set(x, 0, z);
+  g.rotation.y = rot;
+  world.scene.add(g);
+  addCollider(x, z, Math.max(1.05, w * 0.55));
+  return g;
+}
+
+function makeMasjid(x, z) {
+  const g = new THREE.Group();
+  g.add(mesh(new THREE.BoxGeometry(4.2, 2.35, 3.6), 0xf5f0e6, 0, 1.18, 0));
+  const roof = mesh(new THREE.ConeGeometry(3.15, 1.45, 4), 0x3d6b4f, 0, 2.95, 0);
+  roof.rotation.y = Math.PI / 4;
+  g.add(roof);
+  g.add(mesh(new THREE.CylinderGeometry(0.42, 0.48, 0.28, 10), 0xf5f0e6, 0, 3.72, 0));
+  g.add(mesh(new THREE.SphereGeometry(0.62, 10, 8), mat(0x2f6b4f), 0, 4.15, 0));
+  g.add(mesh(new THREE.BoxGeometry(0.06, 0.28, 0.06), 0xc4a24a, 0, 4.82, 0));
+  // short minaret
+  g.add(mesh(new THREE.BoxGeometry(0.7, 3.5, 0.7), 0xf0e6d4, -2.35, 1.75, -1.35));
+  g.add(mesh(new THREE.BoxGeometry(0.86, 0.14, 0.86), 0x3d6b4f, -2.35, 3.55, -1.35));
+  g.add(mesh(new THREE.SphereGeometry(0.36, 8, 6), mat(0x2f6b4f), -2.35, 3.95, -1.35));
+  g.add(mesh(new THREE.BoxGeometry(0.7, 1.35, 0.1), 0x6b4a28, 0, 0.7, 1.84));
+  g.add(mesh(new THREE.BoxGeometry(0.45, 0.5, 0.06), 0x9ad7ef, -1.15, 1.45, 1.84));
+  g.add(mesh(new THREE.BoxGeometry(0.45, 0.5, 0.06), 0x9ad7ef, 1.15, 1.45, 1.84));
+  g.add(mesh(new THREE.BoxGeometry(2.2, 0.12, 1.1), 0xe7dcc4, 0, 0.08, 2.2));
+  g.position.set(x, 0, z);
+  world.scene.add(g);
+  addCollider(x, z, 2.35);
+  addCollider(x - 2.35, z - 1.35, 0.55);
+  return g;
+}
+
+function makeBalai(x, z) {
+  const g = new THREE.Group();
+  g.add(mesh(new THREE.BoxGeometry(5.2, 0.18, 3.8), 0x8b5a2b, 0, 0.42, 0));
+  const posts = [[-2.2, -1.5], [2.2, -1.5], [-2.2, 1.5], [2.2, 1.5], [0, -1.5], [0, 1.5]];
+  posts.forEach(([px, pz]) => {
+    g.add(mesh(new THREE.BoxGeometry(0.16, 2.15, 0.16), 0x6b4a28, px, 1.45, pz));
+  });
+  const roof = mesh(new THREE.ConeGeometry(3.6, 1.35, 4), 0xa16207, 0, 3.05, 0);
+  roof.rotation.y = Math.PI / 4;
+  g.add(roof);
+  g.add(mesh(new THREE.BoxGeometry(1.4, 0.35, 1.0), 0x7c4a1e, 0, 0.7, 0.2));
+  g.position.set(x, 0, z);
+  world.scene.add(g);
+  addCollider(x, z, 1.55);
+  return g;
+}
+
+function makeBeringin(x, z) {
+  const g = new THREE.Group();
+  g.add(mesh(new THREE.CylinderGeometry(0.55, 0.72, 2.6, 8), 0x5c3d1e, 0, 1.3, 0));
+  g.add(mesh(new THREE.BoxGeometry(3.8, 1.5, 3.8), 0x1b6b32, 0, 3.15, 0));
+  g.add(mesh(new THREE.BoxGeometry(2.8, 1.15, 2.8), 0x237a3a, 0.4, 4.1, -0.2));
+  g.add(mesh(new THREE.BoxGeometry(2.2, 0.9, 2.2), 0x17632c, -0.5, 4.7, 0.3));
+  for (let i = 0; i < 5; i++) {
+    const a = i * 1.15;
+    g.add(mesh(new THREE.BoxGeometry(0.08, 1.6, 0.08), 0x6b4a28, Math.cos(a) * 1.3, 1.4, Math.sin(a) * 1.3));
+  }
+  g.position.set(x, 0, z);
+  world.scene.add(g);
+  addCollider(x, z, 1.05);
+  return g;
+}
+
+function makePond(x, z, r) {
+  const water = mesh(new THREE.CircleGeometry(r, 16), mat(0x2a7d8a), x, -0.06, z);
+  water.rotation.x = -Math.PI / 2;
+  world.scene.add(water);
+  const stones = [];
+  for (let i = 0; i < 10; i++) {
+    const a = (i / 10) * Math.PI * 2;
+    stones.push({
+      x: x + Math.cos(a) * r * 0.95,
+      z: z + Math.sin(a) * r * 0.95,
+      y: 0.12,
+      s: 0.35 + seeded(i + 80) * 0.25,
+      ry: a,
+    });
+  }
+  placeInstanced(new THREE.BoxGeometry(0.45, 0.22, 0.35), mat(0x7a756c), stones, (p) => p.y);
+  world.flowers.push({ x, z, r });
+  return { x, z, r };
+}
+
+function makeMailbox(id, x, z, rot) {
+  const g = new THREE.Group();
+  g.add(mesh(new THREE.BoxGeometry(0.1, 0.85, 0.1), 0x6b4a28, 0, 0.42, 0));
+  g.add(mesh(new THREE.BoxGeometry(0.38, 0.26, 0.22), 0xb45309, 0, 0.92, 0));
+  g.add(mesh(new THREE.BoxGeometry(0.16, 0.08, 0.04), 0xe8b84a, 0, 0.92, 0.13));
+  g.position.set(x, 0, z);
+  g.rotation.y = rot;
+  g.userData.id = id;
+  g.userData.kind = 'mailbox';
+  world.scene.add(g);
+  world.mailboxes.push(g);
+  addCollider(x, z, 0.22);
+  return g;
+}
+
+function placeFenceLoop(points, gapAt) {
+  const posts = [];
+  const rails = [];
+  for (let i = 0; i < points.length; i++) {
+    const a = points[i];
+    const b = points[(i + 1) % points.length];
+    if (gapAt && i === gapAt) continue;
+    const dx = b[0] - a[0], dz = b[1] - a[1];
+    const len = Math.hypot(dx, dz);
+    const n = Math.max(1, Math.round(len / 0.85));
+    for (let k = 0; k <= n; k++) {
+      const t = k / n;
+      const x = a[0] + dx * t, z = a[1] + dz * t;
+      posts.push({ x, z, y: 0.4, s: 1, ry: Math.atan2(dx, dz) });
+      if (k < n) {
+        const mx = a[0] + dx * (k + 0.5) / n;
+        const mz = a[1] + dz * (k + 0.5) / n;
+        const seg = len / n;
+        rails.push({
+          x: mx, z: mz, y: 0.48, ry: Math.atan2(dx, dz),
+          sx: 0.08, sy: 0.07, sz: seg * 0.92, s: 1,
+        });
+      }
+    }
+  }
+  placeInstanced(new THREE.BoxGeometry(0.1, 0.8, 0.1), mat(0x6b4a28), posts, (p) => p.y);
+  placeInstanced(new THREE.BoxGeometry(1, 1, 1), mat(0x8b5a2b), rails, (p) => p.y);
+}
+
+function placeFlowers() {
+  const spots = [
+    [0.8, -16.4], [-3.4, -17.8], [3.2, -17.2], [-10.2, -15.6],
+    [7.4, -17.8], [-6.2, -8.4], [2.2, -3.4], [8.8, 1.6],
+  ];
+  const heads = [];
+  const stems = [];
+  spots.forEach(([x, z], i) => {
+    world.flowers.push({ x, z, r: 1.4 });
+    for (let k = 0; k < 4; k++) {
+      const ox = (seeded(i * 9 + k) - 0.5) * 1.3;
+      const oz = (seeded(i * 9 + k + 4) - 0.5) * 1.3;
+      stems.push({ x: x + ox, z: z + oz, y: 0.14, s: 0.7 });
+      heads.push({
+        x: x + ox, z: z + oz, y: 0.28,
+        s: 0.35 + seeded(i + k) * 0.2,
+        ry: seeded(i + k + 2) * Math.PI,
+      });
+    }
+  });
+  placeInstanced(new THREE.BoxGeometry(0.04, 0.28, 0.04), mat(0x2f7a38), stems, (p) => p.y, 'grass');
+  placeInstanced(new THREE.SphereGeometry(0.1, 5, 4), mat(0xe11d48), heads, (p) => p.y);
+}
+
 function buildVillage() {
   makeHouse(-7.5, -10.2, 0.25, 0xf2e4c8, 0xb45309);
   makeHouse(8.2, -11.4, -0.4, 0xf6d6b8, 0x9a3412, 3.0, 2.6, 2.0);
   makeHouse(-9.4, -3.6, 1.1, 0xe9e2d0, 0x7c2d12, 2.8, 2.5, 2.0);
   makeHouse(3.6, -14.2, 0.1, 0xf0dcc0, 0xc2410c, 3.3, 2.8, 2.2);
+  makeHouse(-11.8, -12.5, 0.35, 0xf6e7d0, 0xb45309, 3.0, 2.6, 2.05);
+  makeHouse(10.6, -16.4, -0.55, 0xe8dcc4, 0x9a3412, 2.9, 2.55, 2.05);
+  makeHouse(-12.4, -7.4, 0.95, 0xf3e2c8, 0x7c2d12, 2.7, 2.45, 1.95);
+  makeHouse(5.6, -22.6, 0.12, 0xf0dcc0, 0xc2410c, 3.15, 2.7, 2.15);
+  makeHouse(-5.8, -16.6, 0.2, 0xf7ecd8, 0xa16207, 2.85, 2.5, 2.0);
+  makeHouse(-6.4, 3.4, Math.PI, 0xe9e2d0, 0xb45309, 2.8, 2.5, 2.0);
 
   // well
   const well = new THREE.Group();
@@ -660,14 +884,50 @@ function buildVillage() {
   world.warung = warung;
   warung.userData.kind = 'warung';
 
+  makeMasjid(-10.6, -19.2);
+  makeBalai(8.4, -20.6);
+  makeBeringin(0.2, -19.4);
+  world.ponds = [makePond(-8.6, -23.2, 2.15)];
+
+  makeStall(9.4, 0.6, -0.4, 0xdc2626, 2.3);
+  makeStall(10.6, -2.2, -0.15, 0xca8a04, 2.1);
+  makeStall(10.8, -4.6, 0.1, 0x16a34a, 2.0);
+  const shop = makeStall(9.2, -1.0, -0.55, 0x1d4e89, 2.45);
+  shop.userData.kind = 'shop';
+  world.shopStall = shop;
+
+  makeMailbox('rumah1', -6.2, -8.7, 0.25);
+  makeMailbox('rumah2', 3.6, -12.5, 0.1);
+  makeMailbox('rumah3', -11.8, -10.8, 0.35);
+
+  // kandang ayam (opening on the north/-Z side)
+  placeFenceLoop([[-10.6, 2.4], [-7.0, 2.4], [-7.0, 5.6], [-10.6, 5.6]], 0);
+  const coop = new THREE.Group();
+  coop.add(mesh(new THREE.BoxGeometry(1.5, 1.05, 1.15), 0xc4a574, 0, 0.55, 0));
+  coop.add(mesh(new THREE.BoxGeometry(1.7, 0.1, 1.35), 0x9a3412, 0, 1.12, 0));
+  coop.position.set(-9.6, 0, 4.85);
+  world.scene.add(coop);
+  addCollider(-9.6, 4.85, 0.85);
+
+  placeFenceLoop([[-4.6, -22.4], [3.6, -22.4], [3.6, -16.6], [-4.6, -16.6]], 2);
+
+  placeFlowers();
+
   makeSign('DESA', -1.5, 1.5, 0);
-  makeSign('HUTAN', 11.5, -6, Math.PI / 2);
+  makeSign('HUTAN', 13.2, -6, Math.PI / 2);
   makeSign('PANTAI', 1.2, 12.2, 0);
   makeSign('GUA', -14.2, 3.5, -Math.PI / 2);
+  makeSign('PASAR', 7.4, 1.8, 0.4);
+  makeSign('LANGGAR', -8.2, -16.4, 0.2);
+  makeSign('BALAI', 6.2, -17.8, -0.3);
   makeLamp(1.7, -7.1, 2.4);
   makeLamp(-4.4, -8.6, 2.3);
   makeLamp(4.1, -4.2, 2.25);
   makeLamp(-1.1, -12.2, 2.35);
+  makeLamp(-8.8, -17.4, 2.4);
+  makeLamp(8.6, -18.4, 2.35);
+  makeLamp(8.8, -0.6, 2.3);
+  makeLamp(0.4, -16.6, 2.3);
 }
 
 function buildBeach() {
@@ -1339,6 +1599,10 @@ function updateAtmosphere(dt) {
     L.halo.material.opacity = lamp * 0.28;
     L.light.intensity = lamp * 1.15;
   }
+  if (world.hemi && save.shop && save.shop.lentera) {
+    world.hemi.intensity += night * 0.12;
+  }
+  applyPlayerGear();
   updateSway(dt);
   updateParticles(dt);
   updateAmbience(day, night, dt);
@@ -1521,6 +1785,17 @@ function onPlayerHit() {
   world.shake = 0.28;
   haptic([30, 40, 45]);
   sfxHit();
+  if (save.hp == null) save.hp = save.maxHp || 3;
+  save.hp = Math.max(0, save.hp - 1);
+  refreshHud();
+  if (save.hp <= 0) {
+    save.hp = save.maxHp || 3;
+    persist({ hp: save.hp });
+    showToast('Kau terhuyung, tapi masih kuat.');
+    world.hitCD = 1.6;
+  } else {
+    persist({ hp: save.hp });
+  }
 }
 
 function checkEnemyHits() {
@@ -1531,6 +1806,536 @@ function checkEnemyHits() {
 }
 
 /* -------------------- entities -------------------- */
+
+function inKandang(x, z) {
+  return x > KANDANG.x0 + 0.2 && x < KANDANG.x1 - 0.2 && z > KANDANG.z0 + 0.2 && z < KANDANG.z1 - 0.2;
+}
+
+function makeAyam(color) {
+  const g = new THREE.Group();
+  const body = mesh(new THREE.BoxGeometry(0.28, 0.16, 0.2), color, 0, 0.22, 0);
+  const head = new THREE.Group();
+  head.add(mesh(new THREE.BoxGeometry(0.12, 0.12, 0.12), color, 0, 0, 0));
+  head.add(mesh(new THREE.BoxGeometry(0.05, 0.04, 0.08), 0xf59e0b, 0, -0.02, 0.1));
+  head.add(mesh(new THREE.BoxGeometry(0.04, 0.08, 0.08), 0xb91c1c, 0, 0.1, 0));
+  head.position.set(0, 0.34, 0.14);
+  g.add(body, head);
+  const legL = mesh(new THREE.BoxGeometry(0.03, 0.12, 0.03), 0xf59e0b, -0.06, 0.08, 0);
+  const legR = mesh(new THREE.BoxGeometry(0.03, 0.12, 0.03), 0xf59e0b, 0.06, 0.08, 0);
+  g.add(legL, legR);
+  g.userData.parts = { head, legL, legR };
+  return g;
+}
+
+function makeGrazer(kind) {
+  const g = new THREE.Group();
+  const cow = kind === 'cow';
+  const bodyC = cow ? 0xf5f0e6 : 0xd6d3d1;
+  g.add(mesh(new THREE.BoxGeometry(cow ? 0.85 : 0.55, cow ? 0.5 : 0.32, cow ? 0.45 : 0.28), bodyC, 0, cow ? 0.55 : 0.42, 0));
+  if (cow) g.add(mesh(new THREE.BoxGeometry(0.22, 0.16, 0.18), 0x1c1410, 0.18, 0.62, 0.1));
+  const head = mesh(new THREE.BoxGeometry(cow ? 0.32 : 0.2, cow ? 0.28 : 0.2, cow ? 0.28 : 0.22), bodyC, 0, cow ? 0.7 : 0.58, cow ? 0.4 : 0.28);
+  g.add(head);
+  g.add(mesh(new THREE.BoxGeometry(0.07, cow ? 0.18 : 0.16, 0.05), 0xe7e5e4, -0.1, cow ? 0.9 : 0.74, cow ? 0.38 : 0.26));
+  g.add(mesh(new THREE.BoxGeometry(0.07, cow ? 0.18 : 0.16, 0.05), 0xe7e5e4, 0.1, cow ? 0.9 : 0.74, cow ? 0.38 : 0.26));
+  const legS = cow ? 0.1 : 0.07;
+  const legH = cow ? 0.32 : 0.26;
+  const ox = cow ? 0.28 : 0.16, oz = cow ? 0.15 : 0.1;
+  [[-ox, -oz], [ox, -oz], [-ox, oz], [ox, oz]].forEach(([lx, lz]) => {
+    g.add(mesh(new THREE.BoxGeometry(legS, legH, legS), cow ? 0x1c1410 : 0xa8a29e, lx, legH / 2, lz));
+  });
+  g.userData.parts = { head };
+  g.userData.kind = kind;
+  return g;
+}
+
+function makeCat(color) {
+  const g = new THREE.Group();
+  g.add(mesh(new THREE.BoxGeometry(0.34, 0.16, 0.18), color, 0, 0.2, 0));
+  const head = mesh(new THREE.BoxGeometry(0.16, 0.14, 0.16), color, 0, 0.3, 0.16);
+  g.add(head);
+  g.add(mesh(new THREE.BoxGeometry(0.06, 0.08, 0.04), color, -0.06, 0.4, 0.14));
+  g.add(mesh(new THREE.BoxGeometry(0.06, 0.08, 0.04), color, 0.06, 0.4, 0.14));
+  const tail = mesh(new THREE.BoxGeometry(0.05, 0.05, 0.22), color, 0, 0.24, -0.2);
+  g.add(tail);
+  g.userData.parts = { head, tail };
+  return g;
+}
+
+function makeBird() {
+  const g = new THREE.Group();
+  g.add(mesh(new THREE.BoxGeometry(0.14, 0.08, 0.22), 0x1f2937, 0, 0, 0));
+  const wingL = mesh(new THREE.BoxGeometry(0.32, 0.03, 0.12), 0x374151, -0.16, 0, 0);
+  const wingR = mesh(new THREE.BoxGeometry(0.32, 0.03, 0.12), 0x374151, 0.16, 0, 0);
+  g.add(wingL, wingR);
+  g.userData.parts = { wingL, wingR };
+  return g;
+}
+
+function makeFish(color) {
+  const g = new THREE.Group();
+  g.add(mesh(new THREE.BoxGeometry(0.22, 0.1, 0.1), color, 0, 0, 0));
+  g.add(mesh(new THREE.BoxGeometry(0.1, 0.08, 0.02), color, -0.14, 0, 0));
+  return g;
+}
+
+function makeFlutter(color) {
+  const g = new THREE.Group();
+  const wingL = mesh(new THREE.BoxGeometry(0.16, 0.02, 0.1), color, -0.08, 0, 0);
+  const wingR = mesh(new THREE.BoxGeometry(0.16, 0.02, 0.1), color, 0.08, 0, 0);
+  g.add(wingL, wingR);
+  g.add(mesh(new THREE.BoxGeometry(0.04, 0.04, 0.08), 0x1c1917, 0, 0, 0));
+  g.userData.parts = { wingL, wingR };
+  return g;
+}
+
+function spawnAnimals() {
+  const A = world.animals;
+  A.ayam = [];
+  A.grazers = [];
+  A.cats = [];
+  A.birds = [];
+  A.fish = [];
+  A.flutters = [];
+  const ayamSpots = [
+    { id: 'a0', x: -1.2, z: -17.6, color: 0xf5f0e6 },
+    { id: 'a1', x: 6.2, z: -8.4, color: 0xb45309 },
+    { id: 'a2', x: 2.4, z: 1.1, color: 0xfef3c7 },
+    { id: 'a3', x: -8.8, z: 4.2, color: 0xf5f0e6, pen: true },
+  ];
+  ayamSpots.forEach((s) => {
+    const a = makeAyam(s.color);
+    const caught = !!(s.pen || (save.ayamCaught && save.ayamCaught[s.id]));
+    const x = caught ? (-9.4 + seeded(s.id.length + 7) * 1.6) : s.x;
+    const z = caught ? (3.2 + seeded(s.id.length + 9) * 1.6) : s.z;
+    a.position.set(x, 0, z);
+    a.userData.id = s.id;
+    a.userData.homeX = s.x;
+    a.userData.homeZ = s.z;
+    a.userData.state = caught ? 'pen' : 'wander';
+    a.userData.caught = caught;
+    a.userData.t = seeded(s.x) * 2;
+    a.userData.heading = seeded(s.z) * Math.PI * 2;
+    a.userData.quest = !s.pen;
+    world.scene.add(a);
+    A.ayam.push(a);
+  });
+
+  const grazeSpots = [
+    { kind: 'goat', x: -8.2, z: -52.4 },
+    { kind: 'goat', x: -1.6, z: -58.2 },
+    { kind: 'cow', x: 7.4, z: -56.0 },
+    { kind: 'cow', x: 10.2, z: -51.6 },
+  ];
+  grazeSpots.forEach((s, i) => {
+    const g = makeGrazer(s.kind);
+    g.position.set(s.x, 0, s.z);
+    g.userData.homeX = s.x;
+    g.userData.homeZ = s.z;
+    g.userData.state = 'graze';
+    g.userData.t = 1 + i;
+    g.userData.heading = seeded(i + 40) * Math.PI * 2;
+    world.scene.add(g);
+    A.grazers.push(g);
+  });
+
+  [[-3.2, -8.8, 0xd6d3d1], [6.8, -13.2, 0x78716c]].forEach(([x, z, col], i) => {
+    const c = makeCat(col);
+    c.position.set(x, 0, z);
+    c.userData.homeX = x;
+    c.userData.homeZ = z;
+    c.userData.state = 'sit';
+    c.userData.t = 2 + i;
+    c.userData.heading = i;
+    c.userData.followT = 0;
+    world.scene.add(c);
+    A.cats.push(c);
+  });
+
+  for (let i = 0; i < 6; i++) {
+    const b = makeBird();
+    b.userData.r = 8 + i * 1.7;
+    b.userData.cy = 8.5 + (i % 3) * 1.1;
+    b.userData.cx = (i % 2) * 8 - 2;
+    b.userData.cz = -10 - (i % 3) * 6;
+    b.userData.phase = i * 0.9;
+    b.userData.speed = 0.35 + i * 0.05;
+    world.scene.add(b);
+    A.birds.push(b);
+  }
+
+  const fishSpots = [
+    { x: -8.6, z: -23.2, sea: false },
+    { x: -8.2, z: -22.6, sea: false },
+    { x: 3.2, z: 22.4, sea: true },
+    { x: -6.0, z: 21.5, sea: true },
+  ];
+  fishSpots.forEach((s, i) => {
+    const f = makeFish(i % 2 ? 0xf97316 : 0x38bdf8);
+    f.position.set(s.x, s.sea ? -0.2 : -0.1, s.z);
+    f.userData.homeX = s.x;
+    f.userData.homeZ = s.z;
+    f.userData.sea = s.sea;
+    f.userData.t = 1 + i * 1.4;
+    f.userData.jump = 0;
+    world.scene.add(f);
+    A.fish.push(f);
+  });
+
+  const cols = [0xf59e0b, 0x38bdf8, 0xf472b6, 0xa3e635, 0xfda4af];
+  for (let i = 0; i < 5; i++) {
+    const fl = makeFlutter(cols[i]);
+    const fp = world.flowers[i] || { x: 0, z: -16 };
+    fl.position.set(fp.x, 0.7, fp.z);
+    fl.userData.homeX = fp.x;
+    fl.userData.homeZ = fp.z;
+    fl.userData.phase = i * 1.3;
+    world.scene.add(fl);
+    A.flutters.push(fl);
+  }
+
+  const nFire = 10;
+  const inst = new THREE.InstancedMesh(
+    new THREE.SphereGeometry(0.06, 5, 4),
+    new THREE.MeshBasicMaterial({ color: 0xfde68a }),
+    nFire
+  );
+  inst.userData.bases = [];
+  const dummy = new THREE.Object3D();
+  for (let i = 0; i < nFire; i++) {
+    const rec = {
+      x: -12 + seeded(i + 200) * 22,
+      z: -24 + seeded(i + 210) * 28,
+      y: 0.5 + seeded(i + 220) * 1.4,
+      phase: seeded(i + 230) * Math.PI * 2,
+    };
+    dummy.position.set(rec.x, rec.y, rec.z);
+    dummy.updateMatrix();
+    inst.setMatrixAt(i, dummy.matrix);
+    inst.userData.bases.push(rec);
+  }
+  inst.userData.dummy = dummy;
+  inst.visible = false;
+  world.scene.add(inst);
+  A.fireflies = inst;
+}
+
+function tryMoveAnimal(obj, nx, nz) {
+  if (!isWalkable(nx, nz)) return false;
+  if (Math.hypot(nx, nz) > WALK_R - 0.4) return false;
+  obj.position.x = nx;
+  obj.position.z = nz;
+  return true;
+}
+
+function updateAyam(dt) {
+  const t = world.clock.elapsedTime;
+  const p = world.player;
+  let changed = false;
+  for (const a of world.animals.ayam) {
+    const u = a.userData;
+    u.t -= dt;
+    const dx = p ? p.position.x - a.position.x : 0;
+    const dz = p ? p.position.z - a.position.z : 0;
+    const d = Math.hypot(dx, dz);
+    if (u.caught || u.state === 'pen') {
+      u.state = 'pen';
+      if (u.t < 0) {
+        u.t = 0.6 + Math.random() * 1.8;
+        u.heading += (Math.random() - 0.5) * 1.2;
+      }
+      const nx = a.position.x + Math.sin(u.heading) * 0.35 * dt;
+      const nz = a.position.z + Math.cos(u.heading) * 0.35 * dt;
+      if (inKandang(nx, nz)) {
+        a.position.x = nx;
+        a.position.z = nz;
+      } else {
+        u.heading += 1.2;
+      }
+    } else if (p && world.playing && d < 2.15) {
+      u.state = 'flee';
+      u.heading = Math.atan2(-dx, -dz);
+      const spd = 3.6;
+      tryMoveAnimal(a, a.position.x + Math.sin(u.heading) * spd * dt, a.position.z + Math.cos(u.heading) * spd * dt);
+      if (inKandang(a.position.x, a.position.z)) {
+        u.caught = true;
+        u.state = 'pen';
+        if (u.quest) {
+          const caught = { ...save.ayamCaught, [u.id]: true };
+          persist({ ayamCaught: caught });
+          changed = true;
+          const n = ayamCaughtCount();
+          if (save.quests.ayam === 'active') showToast('Ayam masuk kandang! (' + n + '/3)');
+        }
+      }
+    } else {
+      if (u.state === 'flee' && d > 3.2) u.state = 'wander';
+      if (u.state === 'wander' && u.t < 0) {
+        u.state = Math.random() < 0.45 ? 'peck' : 'wander';
+        u.t = u.state === 'peck' ? 0.9 + Math.random() * 0.6 : 1.4 + Math.random();
+        u.heading += (Math.random() - 0.5) * 1.6;
+      }
+      if (u.state === 'wander') {
+        tryMoveAnimal(a, a.position.x + Math.sin(u.heading) * 0.7 * dt, a.position.z + Math.cos(u.heading) * 0.7 * dt);
+      }
+    }
+    a.rotation.y = u.heading;
+    a.position.y = groundHeight(a.position.x, a.position.z);
+    const parts = u.parts;
+    if (parts) {
+      if (u.state === 'peck') parts.head.rotation.x = 0.85 + Math.sin(t * 10) * 0.25;
+      else parts.head.rotation.x = Math.sin(t * 3 + u.heading) * 0.12;
+      const step = (u.state === 'wander' || u.state === 'flee') ? Math.sin(t * (u.state === 'flee' ? 14 : 8)) * 0.35 : 0;
+      parts.legL.rotation.x = step;
+      parts.legR.rotation.x = -step;
+    }
+  }
+  return changed;
+}
+
+function ayamCaughtCount() {
+  let n = 0;
+  for (const a of world.animals.ayam) {
+    if (a.userData.quest && a.userData.caught) n++;
+  }
+  return n;
+}
+
+function captureAllAyam() {
+  const caught = { ...save.ayamCaught };
+  let i = 0;
+  for (const a of world.animals.ayam) {
+    if (!a.userData.quest) continue;
+    a.userData.caught = true;
+    a.userData.state = 'pen';
+    a.position.set(-9.3 + i * 0.7, 0, 3.6 + i * 0.35);
+    caught[a.userData.id] = true;
+    i++;
+  }
+  persist({ ayamCaught: caught });
+}
+
+function updateGrazers(dt) {
+  const t = world.clock.elapsedTime;
+  for (const g of world.animals.grazers) {
+    const u = g.userData;
+    u.t -= dt;
+    if (u.t < 0) {
+      u.state = u.state === 'graze' ? 'walk' : 'graze';
+      u.t = u.state === 'graze' ? 2 + Math.random() * 3 : 1.4 + Math.random() * 2;
+      u.heading += (Math.random() - 0.5) * 1.4;
+    }
+    if (u.state === 'walk') {
+      const nx = g.position.x + Math.sin(u.heading) * 0.55 * dt;
+      const nz = g.position.z + Math.cos(u.heading) * 0.55 * dt;
+      if (Math.hypot(nx - u.homeX, nz - u.homeZ) < 5 && isWalkable(nx, nz)) {
+        g.position.x = nx;
+        g.position.z = nz;
+      } else {
+        u.heading += 1.1;
+      }
+    }
+    g.rotation.y = u.heading;
+    g.position.y = groundHeight(g.position.x, g.position.z);
+    if (u.parts && u.parts.head) {
+      u.parts.head.rotation.x = u.state === 'graze' ? 0.7 + Math.sin(t * 1.5) * 0.08 : Math.sin(t * 3) * 0.1;
+    }
+  }
+}
+
+function updateCats(dt) {
+  const t = world.clock.elapsedTime;
+  const p = world.player;
+  for (const c of world.animals.cats) {
+    const u = c.userData;
+    u.t -= dt;
+    const dx = p ? p.position.x - c.position.x : 0;
+    const dz = p ? p.position.z - c.position.z : 0;
+    const d = Math.hypot(dx, dz);
+    if (p && world.playing && d < 3.4 && d > 0.7) {
+      u.state = 'follow';
+      u.followT = 3.2;
+      u.heading = Math.atan2(dx, dz);
+      tryMoveAnimal(c, c.position.x + Math.sin(u.heading) * 1.5 * dt, c.position.z + Math.cos(u.heading) * 1.5 * dt);
+    } else if (u.state === 'follow') {
+      u.followT -= dt;
+      if (u.followT <= 0) { u.state = 'sit'; u.t = 2; }
+      else {
+        u.heading = Math.atan2(dx, dz);
+        if (d > 0.9) tryMoveAnimal(c, c.position.x + Math.sin(u.heading) * 1.3 * dt, c.position.z + Math.cos(u.heading) * 1.3 * dt);
+      }
+    } else if (u.t < 0) {
+      u.state = u.state === 'sit' ? 'walk' : 'sit';
+      u.t = u.state === 'sit' ? 2 + Math.random() * 3 : 1.5 + Math.random();
+      u.heading += (Math.random() - 0.5) * 2;
+    } else if (u.state === 'walk') {
+      const nx = c.position.x + Math.sin(u.heading) * 0.7 * dt;
+      const nz = c.position.z + Math.cos(u.heading) * 0.7 * dt;
+      if (Math.hypot(nx - u.homeX, nz - u.homeZ) < 6 && isWalkable(nx, nz)) {
+        c.position.x = nx; c.position.z = nz;
+      } else u.heading += 1.2;
+    }
+    c.rotation.y = u.heading;
+    c.position.y = groundHeight(c.position.x, c.position.z);
+    if (u.parts && u.parts.tail) u.parts.tail.rotation.y = Math.sin(t * 3 + u.heading) * 0.4;
+  }
+}
+
+function updateBirdsFishFlutters(dt) {
+  const t = world.clock.elapsedTime;
+  const day = dayFactor();
+  const night = 1 - day;
+  for (const b of world.animals.birds) {
+    const u = b.userData;
+    const ang = t * u.speed + u.phase;
+    b.position.set(
+      u.cx + Math.cos(ang) * u.r,
+      u.cy + Math.sin(ang * 2) * 0.45,
+      u.cz + Math.sin(ang) * u.r * 0.7
+    );
+    b.rotation.y = -ang + Math.PI / 2;
+    b.visible = day > 0.28;
+    if (u.parts) {
+      const flap = Math.sin(t * 12 + u.phase) * 0.5;
+      u.parts.wingL.rotation.z = 0.35 + flap;
+      u.parts.wingR.rotation.z = -0.35 - flap;
+    }
+  }
+  for (const f of world.animals.fish) {
+    const u = f.userData;
+    u.t -= dt;
+    if (u.jump > 0) {
+      u.jump += dt * 1.7;
+      const k = u.jump;
+      const y0 = u.sea ? -0.15 : -0.05;
+      f.position.y = y0 + Math.sin(Math.min(1, k) * Math.PI) * (u.sea ? 1.15 : 0.85);
+      f.position.x = u.homeX + Math.sin(k * 2) * 0.4;
+      f.rotation.z = (0.5 - k) * 0.8;
+      f.visible = f.position.y > y0 - 0.02;
+      if (k >= 1) { u.jump = 0; u.t = 2.5 + Math.random() * 3; f.visible = false; }
+    } else {
+      f.visible = false;
+      if (u.t < 0) { u.jump = 0.001; f.position.set(u.homeX, 0, u.homeZ); f.rotation.z = 0; }
+    }
+  }
+  for (const fl of world.animals.flutters) {
+    const u = fl.userData;
+    const ang = t * 0.7 + u.phase;
+    fl.position.set(
+      u.homeX + Math.cos(ang) * 1.1,
+      0.55 + Math.abs(Math.sin(t * 2 + u.phase)) * 0.55,
+      u.homeZ + Math.sin(ang * 1.3) * 1.1
+    );
+    fl.visible = day > 0.32;
+    if (u.parts) {
+      const w = Math.sin(t * 16 + u.phase) * 0.7;
+      u.parts.wingL.rotation.z = w;
+      u.parts.wingR.rotation.z = -w;
+    }
+  }
+  const fire = world.animals.fireflies;
+  if (fire) {
+    fire.visible = night > 0.45;
+    if (fire.visible) {
+      const dummy = fire.userData.dummy;
+      fire.userData.bases.forEach((rec, i) => {
+        dummy.position.set(
+          rec.x + Math.sin(t * 0.6 + rec.phase) * 0.5,
+          rec.y + Math.sin(t * 2.2 + rec.phase) * 0.25,
+          rec.z + Math.cos(t * 0.5 + rec.phase) * 0.5
+        );
+        dummy.updateMatrix();
+        fire.setMatrixAt(i, dummy.matrix);
+      });
+      fire.instanceMatrix.needsUpdate = true;
+    }
+  }
+}
+
+function updateWanderNpcs(dt) {
+  const t = world.clock.elapsedTime;
+  for (const n of world.npcs) {
+    const u = n.userData;
+    if (!u.wander || world.blocked) {
+      continue;
+    }
+    u.wT -= dt;
+    if (u.wState === 'walk') {
+      const spd = 1.15;
+      const nx = n.position.x + Math.sin(u.heading) * spd * dt;
+      const nz = n.position.z + Math.cos(u.heading) * spd * dt;
+      let blocked = !isWalkable(nx, nz) || Math.hypot(nx - u.homeX, nz - u.homeZ) > 8;
+      if (!blocked) {
+        for (const c of world.colliders) {
+          if ((nx - c.x) * (nx - c.x) + (nz - c.z) * (nz - c.z) < (c.r + 0.5) * (c.r + 0.5)) { blocked = true; break; }
+        }
+      }
+      if (blocked) u.heading += 1.3;
+      else {
+        n.position.x = nx;
+        n.position.z = nz;
+        n.rotation.y = u.heading;
+      }
+      if (u.wT < 0) { u.wState = 'idle'; u.wT = 1.5 + Math.random() * 2.5; }
+      if (u.limbs) {
+        const swing = Math.sin(t * 7) * 0.45;
+        u.limbs.armL.rotation.x = swing;
+        u.limbs.armR.rotation.x = -swing;
+        u.limbs.legL.rotation.x = -swing;
+        u.limbs.legR.rotation.x = swing;
+      }
+    } else if (u.wT < 0) {
+      u.wState = 'walk';
+      u.wT = 2 + Math.random() * 3;
+      u.heading += (Math.random() - 0.5) * 2.2;
+    }
+  }
+}
+
+function updateAnimals(dt) {
+  if (!world.animals || !world.animals.ayam) return;
+  updateAyam(dt);
+  updateGrazers(dt);
+  updateCats(dt);
+  updateBirdsFishFlutters(dt);
+  updateWanderNpcs(dt);
+}
+
+function applyPlayerGear() {
+  const p = world.player;
+  if (!p) return;
+  if (save.shop && save.shop.topi) {
+    if (!world.playerGear.topi) {
+      const hat = mesh(new THREE.ConeGeometry(0.34, 0.28, 8), 0xc4a24a, 0, 1.86, 0);
+      p.add(hat);
+      world.playerGear.topi = hat;
+    }
+    world.playerGear.topi.visible = true;
+  } else if (world.playerGear.topi) {
+    world.playerGear.topi.visible = false;
+  }
+  if (world.lanternLight) {
+    const night = 1 - dayFactor();
+    const on = !!(save.shop && save.shop.lentera);
+    world.lanternLight.intensity = on ? Math.max(0.15, night * 1.55) : 0;
+  }
+  if (save.shop && save.shop.lentera) {
+    if (!world.playerGear.lantern) {
+      const lantern = new THREE.Group();
+      lantern.add(mesh(new THREE.BoxGeometry(0.12, 0.16, 0.12), 0xb45309, 0, 0, 0));
+      const glow = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.12, 0.1), new THREE.MeshBasicMaterial({ color: 0xffc266 }));
+      glow.position.y = 0;
+      lantern.add(glow);
+      lantern.position.set(0.28, 0.95, 0.12);
+      p.add(lantern);
+      world.playerGear.lantern = lantern;
+    }
+    world.playerGear.lantern.visible = true;
+  } else if (world.playerGear.lantern) {
+    world.playerGear.lantern.visible = false;
+  }
+}
+
+
 function spawnPlayer() {
   const p = makePerson({
     shirt: 0x2a9d8f,
@@ -1540,6 +2345,10 @@ function spawnPlayer() {
   });
   p.position.set(save.px, 0, save.pz);
   p.rotation.y = save.rot;
+  const light = new THREE.PointLight(0xffc878, 0, 11, 2);
+  light.position.set(0, 1.35, 0.25);
+  p.add(light);
+  world.lanternLight = light;
   world.scene.add(p);
   world.player = p;
   world.limbs = p.userData.limbs;
@@ -1595,6 +2404,44 @@ function spawnNpcs() {
       x: 17.4, z: -68.8, rot: 0.8,
       look: { shirt: 0x0f766e, pants: 0x1e3a5f, skin: 0xb8874e, hair: 0x1c1410, hat: 'cap' },
     },
+    {
+      id: 'ijah',
+      name: 'Bu Ijah',
+      x: 7.55, z: -0.35, rot: 2.5,
+      look: { shirt: 0x7c3aed, pants: 0x4c1d95, skin: 0xe0ac69, hair: 0x1c1410, hat: 'bun' },
+    },
+    {
+      id: 'hasan',
+      name: 'Pak Hasan',
+      x: 8.0, z: -18.15, rot: 0.2,
+      look: { shirt: 0xf5f0e6, pants: 0x1f2937, skin: 0xc9956b, hair: 0x4b3b2a, hat: 'peci' },
+    },
+    {
+      id: 'yanti',
+      name: 'Bu Yanti',
+      x: -6.55, z: 2.05, rot: 0.35,
+      look: { shirt: 0xdb2777, pants: 0x831843, skin: 0xe0ac69, hair: 0x1c1410, hat: 'bun' },
+    },
+    {
+      id: 'budi',
+      name: 'Mas Budi',
+      x: 1.4, z: -3.6, rot: 0.3,
+      wander: true,
+      look: { shirt: 0x2563eb, pants: 0x1e3a5f, skin: 0xc9956b, hair: 0x1c1410, hat: 'cap' },
+    },
+    {
+      id: 'tari',
+      name: 'Nenek Tari',
+      x: 1.6, z: -18.15, rot: -0.8,
+      look: { shirt: 0x9a3412, pants: 0x44403c, skin: 0xc9956b, hair: 0x9ca3af, hat: 'bun' },
+    },
+    {
+      id: 'joko',
+      name: 'Bang Joko',
+      x: 7.2, z: -7.4, rot: -0.5,
+      wander: true,
+      look: { shirt: 0xca8a04, pants: 0x3f3f46, skin: 0xb8874e, hair: 0x1c1410, hat: 'cap' },
+    },
   ];
   world.npcs = list.map((spec) => {
     const p = makePerson(spec.look);
@@ -1603,8 +2450,14 @@ function spawnNpcs() {
     p.userData.id = spec.id;
     p.userData.name = spec.name;
     p.userData.kind = 'npc';
+    p.userData.homeX = spec.x;
+    p.userData.homeZ = spec.z;
+    p.userData.wander = !!spec.wander;
+    p.userData.wState = 'idle';
+    p.userData.wT = 1 + seeded(spec.x + 3) * 2;
+    p.userData.heading = spec.rot;
     world.scene.add(p);
-    addCollider(spec.x, spec.z, 0.55);
+    if (!spec.wander) addCollider(spec.x, spec.z, 0.55);
     return p;
   });
 }
@@ -1616,6 +2469,7 @@ const COIN_SPOTS = [
   [-18, 10], [-20, 1], [-13, -2], [6, 6], [-6, 8],
   [-6, -52], [4, -57], [-11, -56], [8, -50],
   [20, -73], [28, -76], [22, -81],
+  [0.4, -17.5], [-10.2, -14.8], [9.0, 1.4], [-8.0, 1.8],
 ];
 
 function spawnCoins() {
@@ -1698,6 +2552,7 @@ function buildWorld() {
   spawnPuzzleStones();
   spawnRohs();
   spawnPusaka();
+  spawnAnimals();
 }
 
 /* -------------------- save / ui -------------------- */
@@ -1709,6 +2564,14 @@ function persist(partial) {
 
 function refreshHud() {
   ui.coinCount.textContent = String(save.coins);
+  if (ui.hearts) {
+    const hp = Math.max(0, save.hp || 0);
+    const max = Math.max(3, save.maxHp || 3);
+    ui.hearts.textContent = '♥'.repeat(hp) + '♡'.repeat(Math.max(0, max - hp));
+  }
+  if (ui.staminaFill) {
+    ui.staminaFill.style.transform = 'scaleX(' + Math.max(0, Math.min(1, world.stamina)) + ')';
+  }
   const lines = [];
   if (save.quests.kades === 'active') lines.push('Kumpulkan koin (' + Math.min(save.coins, 10) + '/10)');
   if (save.quests.sari === 'active') {
@@ -1734,6 +2597,14 @@ function refreshHud() {
     if (save.rohDefeated < 4) lines.push('Kalahkan roh batu (' + save.rohDefeated + '/4)');
     else if (!save.pusakaTaken) lines.push('Ambil Pusaka Nusantara di altar');
   }
+  if (save.quests.ayam === 'active') {
+    const n = ayamCaughtCount();
+    lines.push(n >= 3 ? 'Bicara lagi dengan Bu Yanti' : 'Giring ayam ke kandang (' + n + '/3)');
+  }
+  if (save.quests.surat === 'active') {
+    const n = letterCount();
+    lines.push(n >= 3 ? 'Kembali ke Pak Hasan di balai' : 'Antar surat ke rumah (' + n + '/3)');
+  }
   if (!lines.length) {
     ui.missions.innerHTML = '<p>Bicara dengan warga untuk menerima misi.</p>';
   } else {
@@ -1746,7 +2617,13 @@ function renderInventory() {
   const items = [];
   items.push('Koin: ' + save.coins);
   save.inventory.forEach((id) => items.push(ITEM_NAMES[id] || id));
-  if (save.inventory.length === 0 && save.coins === 0) {
+  if (save.shop) {
+    if (save.shop.sepatu) items.push(ITEM_NAMES.sepatu);
+    if (save.shop.topi) items.push(ITEM_NAMES.topi);
+    if (save.shop.lentera) items.push(ITEM_NAMES.lentera);
+    if (save.shop.jamu) items.push('Jamu hati (sudah diminum)');
+  }
+  if (save.inventory.length === 0 && save.coins === 0 && !(save.shop && (save.shop.sepatu || save.shop.topi || save.shop.lentera || save.shop.jamu))) {
     ui.invList.innerHTML = '<li class="empty">Tas masih kosong.</li>';
   } else {
     ui.invList.innerHTML = items.map((t) => '<li>' + t + '</li>').join('');
@@ -1774,7 +2651,7 @@ function areaAt(x, z) {
   if (z < -38) return 'Sawah';
   if (x < -14 && z > -10 && z < 16) return 'Gua';
   if (z > 11) return 'Pantai';
-  if (x > 10 && z < 9 && z > -28) return 'Hutan';
+  if (x > 12 && z < 9 && z > -28) return 'Hutan';
   return 'Desa';
 }
 
@@ -1819,6 +2696,10 @@ function talkTo(npc) {
   else if (id === 'rina') talkRina();
   else if (id === 'karya') talkKarya();
   else if (id === 'andi') talkAndi();
+  else if (id === 'ijah') talkIjah();
+  else if (id === 'hasan') talkHasan();
+  else if (id === 'yanti') talkYanti();
+  else talkFlavor(npc);
 }
 
 function talkKades() {
@@ -2051,6 +2932,194 @@ function talkAndi() {
   }
 }
 
+
+function letterCount() {
+  const L = save.letters || {};
+  return (L.rumah1 ? 1 : 0) + (L.rumah2 ? 1 : 0) + (L.rumah3 ? 1 : 0);
+}
+
+function talkFlavor(npc) {
+  const id = npc.userData.id;
+  let text = 'Selamat datang di desa kami.';
+  if (id === 'budi') text = 'Pasar pagi ini ramai, nak. Coba lihat toko Bu Ijah kalau butuh sepatu atau lentera.';
+  else if (id === 'joko') text = 'Lapangan di utara sudah ada pohon beringin. Nenek Tari sering duduk di sana.';
+  else if (id === 'tari') text = 'Duduklah sebentar di bawah beringin, nak. Desa ini makin ramai, syukurlah.';
+  openDialog(npc.userData.name, text, [{ label: 'Baik', primary: true, fn: closeDialog }]);
+}
+
+function talkIjah() {
+  openDialog('Bu Ijah', 'Selamat datang di Toko Pasar. Ada sepatu lari, topi anyaman, jamu hati, dan lentera kuningan. Mau lihat-lihat?', [
+    { label: 'Lihat barang', primary: true, fn: () => { closeDialog(); openShop(); } },
+    { label: 'Nanti saja', fn: closeDialog },
+  ]);
+}
+
+function talkYanti() {
+  const q = save.quests.ayam;
+  const n = ayamCaughtCount();
+  if (q === 'idle') {
+    openDialog('Bu Yanti', 'Aduh, tiga ayamku kabur ke lapangan dan sekitar pasar! Tolong giring mereka kembali ke kandang di sebelah sini.', [
+      { label: 'Saya giring', primary: true, fn: () => { persist({ quests: { ...save.quests, ayam: 'active' } }); showToast('Misi baru: giring ayam ke kandang.'); closeDialog(); } },
+      { label: 'Nanti saja', fn: closeDialog },
+    ]);
+  } else if (q === 'active' && n < 3) {
+    openDialog('Bu Yanti', 'Masih ada ayam yang belum masuk. Sudah ' + n + ' dari 3. Dekati mereka perlahan, lalu arahkan ke kandang.', [
+      { label: 'Baik, Bu', primary: true, fn: closeDialog },
+    ]);
+  } else if (q === 'active') {
+    openDialog('Bu Yanti', 'Wah, semua ayam sudah kembali! Terima kasih, nak. Ini sedikit koin untukmu.', [
+      { label: 'Sama-sama, Bu', primary: true, fn: () => {
+        persist({ coins: save.coins + 4, quests: { ...save.quests, ayam: 'done' } });
+        showToast('Misi Bu Yanti selesai. Kau mendapat 4 koin.');
+        closeDialog();
+        onQuestComplete();
+        maybeWin();
+      } },
+    ]);
+  } else {
+    openDialog('Bu Yanti', 'Ayam-ayam sudah tenang di kandang. Kalau lapar, beli jamu di toko Bu Ijah ya.', [
+      { label: 'Baik, Bu', primary: true, fn: closeDialog },
+    ]);
+  }
+}
+
+function talkHasan() {
+  const q = save.quests.surat;
+  const n = letterCount();
+  if (q === 'idle') {
+    openDialog('Pak Hasan', 'Ada tiga surat dari balai desa yang harus sampai ke rumah warga. Tolong masukkan ke kotak surat di depan tiga rumah itu, ya.', [
+      { label: 'Saya antar', primary: true, fn: () => {
+        const inv = save.inventory.includes('surat') ? save.inventory : [...save.inventory, 'surat'];
+        persist({ inventory: inv, quests: { ...save.quests, surat: 'active' } });
+        showToast('Misi baru: antar tiga surat ke rumah warga.');
+        closeDialog();
+      } },
+      { label: 'Nanti saja', fn: closeDialog },
+    ]);
+  } else if (q === 'active' && n < 3) {
+    openDialog('Pak Hasan', 'Suratnya belum semua sampai. Sudah ' + n + ' dari 3 rumah. Cari kotak surat di depan rumah.', [
+      { label: 'Baik, Pak', primary: true, fn: closeDialog },
+    ]);
+  } else if (q === 'active') {
+    openDialog('Pak Hasan', 'Semua surat sudah sampai. Desa berterima kasih. Ini sedikit koin untuk perjalananmu.', [
+      { label: 'Sama-sama, Pak', primary: true, fn: () => {
+        persist({
+          coins: save.coins + 4,
+          inventory: save.inventory.filter((x) => x !== 'surat'),
+          quests: { ...save.quests, surat: 'done' },
+        });
+        showToast('Misi Pak Hasan selesai. Kau mendapat 4 koin.');
+        closeDialog();
+        onQuestComplete();
+        maybeWin();
+      } },
+    ]);
+  } else {
+    openDialog('Pak Hasan', 'Balai desa selalu terbuka. Kalau butuh berita kampung, datang saja ke sini.', [
+      { label: 'Baik, Pak', primary: true, fn: closeDialog },
+    ]);
+  }
+}
+
+function deliverLetter(id) {
+  if (save.quests.surat !== 'active') {
+    showToast('Bicara dulu dengan Pak Hasan di balai desa.');
+    return;
+  }
+  if (!save.inventory.includes('surat')) {
+    showToast('Suratnya tidak ada di tas.');
+    return;
+  }
+  if (save.letters && save.letters[id]) {
+    showToast('Surat untuk rumah ini sudah masuk.');
+    return;
+  }
+  const letters = { ...(save.letters || {}), [id]: true };
+  persist({ letters });
+  const n = letterCount();
+  showToast(n >= 3 ? 'Semua surat sampai. Kembali ke Pak Hasan.' : 'Surat dimasukkan. (' + n + '/3)');
+  haptic(16);
+  sfxCoin();
+}
+
+function deliverAllLetters() {
+  persist({ letters: { rumah1: true, rumah2: true, rumah3: true } });
+}
+
+const MAIL_NAMES = { rumah1: 'rumah sebelah barat', rumah2: 'rumah dekat sumur', rumah3: 'rumah dekat langgar' };
+
+function openShop() {
+  if (!world.playing || !ui.win.hidden) return;
+  if (!ui.dialog.hidden) closeDialog();
+  ui.inv.hidden = true;
+  if (ui.fxPanel) ui.fxPanel.hidden = true;
+  renderShop();
+  ui.shopPanel.hidden = false;
+  world.blocked = true;
+  ui.controls.hidden = true;
+}
+
+function closeShop() {
+  if (ui.shopPanel) ui.shopPanel.hidden = true;
+  if ((!ui.fxPanel || ui.fxPanel.hidden) && ui.inv.hidden) {
+    world.blocked = false;
+    layoutControls();
+  }
+}
+
+function renderShop() {
+  if (!ui.shopList) return;
+  if (ui.shopCoins) ui.shopCoins.textContent = String(save.coins);
+  ui.shopList.innerHTML = '';
+  SHOP_ITEMS.forEach((it) => {
+    const owned = !!(save.shop && save.shop[it.id]);
+    const li = document.createElement('li');
+    const can = !owned && save.coins >= it.price;
+    li.innerHTML = '<div class="shop-name">' + it.name + '</div><div class="shop-desc">' + it.desc + '</div><div class="shop-buy"></div>';
+    const row = li.querySelector('.shop-buy');
+    if (owned) {
+      const s = document.createElement('span');
+      s.className = 'owned';
+      s.textContent = 'Sudah dimiliki';
+      row.appendChild(s);
+    } else {
+      const price = document.createElement('span');
+      price.textContent = it.price + ' koin';
+      row.appendChild(price);
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'btn primary';
+      b.textContent = 'Beli';
+      if (!can) { b.disabled = true; li.classList.add('pricey'); }
+      b.addEventListener('click', (e) => { e.preventDefault(); buyItem(it.id); });
+      row.appendChild(b);
+    }
+    ui.shopList.appendChild(li);
+  });
+}
+
+function buyItem(id) {
+  const it = SHOP_ITEMS.find((x) => x.id === id);
+  if (!it) return false;
+  if (save.shop && save.shop[id]) { showToast('Barang ini sudah dimiliki.'); return false; }
+  if (save.coins < it.price) { showToast('Koin tidak cukup.'); return false; }
+  const shop = { ...(save.shop || {}), [id]: true };
+  const partial = { coins: save.coins - it.price, shop };
+  if (id === 'jamu') {
+    const maxHp = (save.maxHp || 3) + 1;
+    partial.maxHp = maxHp;
+    partial.hp = maxHp;
+  }
+  persist(partial);
+  applyPlayerGear();
+  renderShop();
+  showToast(it.name + ' terbeli.');
+  haptic(20);
+  sfxCoin();
+  return true;
+}
+
+
 function useWarung() {
   if (save.quests.udin === 'active' && save.inventory.includes('ikan')) {
     openDialog('Warung Desa', 'Kau mengantar ikan dari Nelayan Udin. Ikan segar ini akan segera dimasak untuk warga desa. Terima kasih!', [
@@ -2095,6 +3164,7 @@ function allQuestsDone() {
   const q = save.quests;
   return q.kades === 'done' && q.sari === 'done' && q.udin === 'done' && q.gua === 'done'
     && q.tani === 'done' && q.rina === 'done' && q.prasasti === 'done' && q.roh === 'done'
+    && q.ayam === 'done' && q.surat === 'done'
     && save.treasureTaken && save.pusakaTaken;
 }
 
@@ -2165,6 +3235,14 @@ function targetInteract() {
   }
   const stone = nearestOf(world.stones, 1.85);
   if (stone) return { type: 'stone', obj: stone, label: 'Sentuh batu ' + stone.userData.id };
+  const box = nearestOf(world.mailboxes || [], 1.7);
+  if (box) {
+    const done = save.letters && save.letters[box.userData.id];
+    return { type: 'mailbox', obj: box, label: done ? 'Kotak surat (sudah diantar)' : 'Masukkan surat' };
+  }
+  if (world.shopStall && dist2(world.player.position.x, world.player.position.z, world.shopStall.position.x, world.shopStall.position.z) < 2.3 * 2.3) {
+    return { type: 'shop', obj: world.shopStall, label: 'Buka Toko Pasar' };
+  }
   const w = world.warung;
   if (w && dist2(world.player.position.x, world.player.position.z, w.position.x, w.position.z) < 2.4 * 2.4) {
     return { type: 'warung', obj: w, label: 'Antar ke Warung Desa' };
@@ -2183,11 +3261,14 @@ function doAction() {
     if (first) first.click();
     return;
   }
+  if (ui.shopPanel && !ui.shopPanel.hidden) { closeShop(); return; }
   if (!ui.inv.hidden) { closeInv(); return; }
   if (!ui.win.hidden) return;
   const t = targetInteract();
   if (!t) return;
   if (t.type === 'npc') talkTo(t.obj);
+  else if (t.type === 'shop') openShop();
+  else if (t.type === 'mailbox') deliverLetter(t.obj.userData.id);
   else if (t.type === 'warung') useWarung();
   else if (t.type === 'chest') tryTakeTreasure();
   else if (t.type === 'pusaka') tryTakePusaka();
@@ -2272,10 +3353,11 @@ function tryTakePusaka() {
   maybeWin();
 }
 
-function closeInv() { ui.inv.hidden = true; if (ui.fxPanel && ui.fxPanel.hidden) { world.blocked = false; layoutControls(); } }
+function closeInv() { ui.inv.hidden = true; if (( !ui.fxPanel || ui.fxPanel.hidden) && (!ui.shopPanel || ui.shopPanel.hidden)) { world.blocked = false; layoutControls(); } }
 function openInv() {
   if (!world.playing || !ui.dialog.hidden || !ui.win.hidden) return;
   closeFx();
+  closeShop();
   renderInventory();
   ui.inv.hidden = false;
   world.blocked = true;
@@ -2294,6 +3376,7 @@ function openFx() {
   if (!world.playing || !ui.win.hidden) return;
   if (!ui.dialog.hidden) closeDialog();
   ui.inv.hidden = true;
+  closeShop();
   refreshFxButtons();
   ui.fxPanel.hidden = false;
   world.blocked = true;
@@ -2302,7 +3385,7 @@ function openFx() {
 
 function closeFx() {
   if (ui.fxPanel) ui.fxPanel.hidden = true;
-  if (ui.inv.hidden) {
+  if (ui.inv.hidden && (!ui.shopPanel || ui.shopPanel.hidden)) {
     world.blocked = false;
     layoutControls();
   }
@@ -2392,6 +3475,9 @@ function updatePlayer(dt) {
   if (len < 0.06) {
     world.player.position.y = groundHeight(world.player.position.x, world.player.position.z);
     if (world.viewMode === 'first') world.player.rotation.y = world.camYaw;
+    world.sprinting = false;
+    world.stamina = Math.min(1, world.stamina + dt * 0.28);
+    if (ui.staminaFill) ui.staminaFill.style.transform = 'scaleX(' + world.stamina.toFixed(3) + ')';
     idleLimbs(dt);
     return 0;
   }
@@ -2402,7 +3488,18 @@ function updatePlayer(dt) {
   const rx = fz, rz = -fx;
   const mx = fx * iy + rx * ix;
   const mz = fz * iy + rz * ix;
-  const speed = PLAYER_SPEED * Math.min(1, len);
+  let speed = PLAYER_SPEED * Math.min(1, len);
+  if (save.shop && save.shop.sepatu) speed *= 1.22;
+  const wantSprint = (world.sprintHeld || world.keys.has('ShiftLeft') || world.keys.has('ShiftRight')) && len > 0.15;
+  if (wantSprint && world.stamina > 0.06) {
+    world.sprinting = true;
+    world.stamina = Math.max(0, world.stamina - dt * 0.32);
+    speed *= 1.48;
+  } else {
+    world.sprinting = false;
+    world.stamina = Math.min(1, world.stamina + dt * 0.24);
+  }
+  if (ui.staminaFill) ui.staminaFill.style.transform = 'scaleX(' + world.stamina.toFixed(3) + ')';
   const prevX = world.player.position.x;
   const prevZ = world.player.position.z;
   world.player.position.x += mx * speed * dt;
@@ -2416,8 +3513,8 @@ function updatePlayer(dt) {
   }
   resolveCollisions(prevX, prevZ);
   walkLimbs(dt, len);
-  world.stepT += dt * Math.min(1, len);
-  if (world.stepT > 0.38) {
+  world.stepT += dt * Math.min(1, len) * (world.sprinting ? 1.35 : 1);
+  if (world.stepT > (world.sprinting ? 0.28 : 0.38)) {
     world.stepT = 0;
     sfxStep();
   }
@@ -2456,6 +3553,12 @@ function applyLookKeys(dt) {
 }
 
 function updateCamera(dt) {
+  if (world.overview) {
+    const cam = world.camera;
+    cam.position.set(2.2, 16.5, 15.5);
+    cam.lookAt(0, 0.3, -12);
+    return;
+  }
   applyLookKeys(dt);
   if (world.camManualT > 0) world.camManualT = Math.max(0, world.camManualT - dt);
   const p = world.player;
@@ -2615,6 +3718,85 @@ function updateProps(dt) {
 }
 
 /* -------------------- loop -------------------- */
+function drawMinimap() {
+  const canvas = ui.minimap;
+  if (!canvas || !world.player || ui.hud.hidden) return;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  const w = canvas.width, h = canvas.height;
+  const x0 = -38, x1 = 42, z0 = -94, z1 = 38;
+  const toX = (x) => ((x - x0) / (x1 - x0)) * w;
+  const toY = (z) => ((z - z0) / (z1 - z0)) * h;
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = '#0f4a58';
+  ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = '#1a6f8a';
+  ctx.beginPath();
+  ctx.arc(toX(0), toY(0), ((ISLAND_R + 6) / (x1 - x0)) * w, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#3f9a4a';
+  ctx.beginPath();
+  ctx.arc(toX(0), toY(0), (ISLAND_R / (x1 - x0)) * w, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#e6cf86';
+  ctx.beginPath();
+  ctx.ellipse(toX(0), toY(18), (18 / (x1 - x0)) * w, (10 / (z1 - z0)) * h, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#6a9a3a';
+  ctx.beginPath();
+  ctx.ellipse(toX(SAWAH.x), toY(SAWAH.z), (SAWAH.rx / (x1 - x0)) * w, (SAWAH.rz / (z1 - z0)) * h, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#7c7468';
+  ctx.beginPath();
+  ctx.arc(toX(GUNUNG.x), toY(GUNUNG.z), (GUNUNG.r / (x1 - x0)) * w, 0, Math.PI * 2);
+  ctx.fill();
+  const dot = (x, z, color, r) => {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(toX(x), toY(z), r || 3.2, 0, Math.PI * 2);
+    ctx.fill();
+  };
+  const q = save.quests;
+  const markNpc = (id, color) => {
+    const n = world.npcs.find((p) => p.userData.id === id);
+    if (n) dot(n.position.x, n.position.z, color, 3.4);
+  };
+  if (q.kades !== 'done') markNpc('kades', '#e8b84a');
+  if (q.sari !== 'done') markNpc('sari', '#e8b84a');
+  if (q.udin !== 'done') markNpc('udin', '#e8b84a');
+  if (q.gua !== 'done') markNpc('penjaga', '#e8b84a');
+  if (q.tani !== 'done') markNpc('tani', '#e8b84a');
+  if (q.rina !== 'done') markNpc('rina', '#e8b84a');
+  if (q.prasasti !== 'done') markNpc('karya', '#e8b84a');
+  if (q.roh !== 'done') markNpc('andi', '#e8b84a');
+  if (q.ayam !== 'done') markNpc('yanti', '#fb7185');
+  if (q.surat !== 'done') markNpc('hasan', '#fb7185');
+  if (world.shopStall) dot(world.shopStall.position.x, world.shopStall.position.z, '#7dd3fc', 2.6);
+  if (q.ayam === 'active') dot((KANDANG.x0 + KANDANG.x1) / 2, (KANDANG.z0 + KANDANG.z1) / 2, '#f97316', 3);
+  if (q.surat === 'active') {
+    for (const b of world.mailboxes) {
+      if (!(save.letters && save.letters[b.userData.id])) dot(b.position.x, b.position.z, '#fdba74', 3);
+    }
+  }
+  const px = toX(world.player.position.x);
+  const py = toY(world.player.position.z);
+  ctx.save();
+  ctx.translate(px, py);
+  ctx.rotate(world.player.rotation.y + Math.PI);
+  ctx.fillStyle = '#fff8e6';
+  ctx.strokeStyle = '#16323a';
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(0, -7);
+  ctx.lineTo(-4.5, 5);
+  ctx.lineTo(4.5, 5);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+}
+
+
 function tick() {
   const dt = Math.min(0.05, world.clock.getDelta());
   if (world.attackT > 0) world.attackT -= dt;
@@ -2629,9 +3811,12 @@ function tick() {
   if (world.playing && world.player) {
     updatePlayer(dt);
     checkEnemyHits();
+    updateAnimals(dt);
     updateCamera(dt);
     updateProps(dt);
     pickupNearby();
+    world.mapT += dt;
+    if (world.mapT > 0.12) { world.mapT = 0; drawMinimap(); }
 
     const area = areaAt(world.player.position.x, world.player.position.z);
     if (area !== world.areaName) {
@@ -2656,9 +3841,10 @@ function tick() {
     // title-screen idle camera orbit
     const t = world.clock.elapsedTime;
     const cam = world.camera;
-    cam.position.set(Math.sin(t * 0.12) * 14, 9.5, Math.cos(t * 0.12) * 14 - 4);
-    cam.lookAt(0, 0.8, -6);
+    cam.position.set(Math.sin(t * 0.12) * 18, 12, Math.cos(t * 0.12) * 18 + 4);
+    cam.lookAt(0, 0.6, -10);
     updateProps(dt);
+    updateAnimals(dt);
   }
 
   world.renderer.render(world.scene, world.camera);
@@ -2694,7 +3880,7 @@ function lookEnd() {
 
 function isLookTarget(el) {
   if (!el || !el.closest) return true;
-  return !el.closest('#joystick, #btn-action, #btn-inv, #btn-view, #btn-fx, #btn-inv-close, #dialog, #inventory, #fx-panel, #title-screen, #win-screen, .btn, .chip, .panel, .overlay, a, button');
+  return !el.closest('#joystick, #btn-action, #btn-sprint, #btn-inv, #btn-view, #btn-fx, #btn-inv-close, #btn-shop-close, #dialog, #inventory, #fx-panel, #shop-panel, #minimap, #title-screen, #win-screen, .btn, .chip, .panel, .overlay, a, button');
 }
 
 function applyLookDelta(dx, dy) {
@@ -2766,6 +3952,15 @@ function setupControls() {
   if (ui.fxClose) ui.fxClose.addEventListener('click', (e) => { e.preventDefault(); closeFx(); });
   if (ui.fxSound) ui.fxSound.addEventListener('click', (e) => { e.preventDefault(); setSound(!save.sound); });
   if (ui.fxVib) ui.fxVib.addEventListener('click', (e) => { e.preventDefault(); setVibrate(!save.vibrate); });
+  if (ui.btnShopClose) ui.btnShopClose.addEventListener('click', (e) => { e.preventDefault(); closeShop(); });
+  if (ui.btnSprint) {
+    const sprintOn = (e) => { e.preventDefault(); world.sprintHeld = true; ui.btnSprint.classList.add('held'); };
+    const sprintOff = (e) => { if (e) e.preventDefault(); world.sprintHeld = false; ui.btnSprint.classList.remove('held'); };
+    ui.btnSprint.addEventListener('pointerdown', sprintOn);
+    ui.btnSprint.addEventListener('pointerup', sprintOff);
+    ui.btnSprint.addEventListener('pointercancel', sprintOff);
+    ui.btnSprint.addEventListener('pointerleave', sprintOff);
+  }
   const unlockOnce = () => unlockAudio();
   window.addEventListener('pointerdown', unlockOnce);
   window.addEventListener('keydown', unlockOnce);
@@ -2784,7 +3979,8 @@ function setupControls() {
       if (ui.inv.hidden) openInv(); else closeInv();
     }
     if (e.code === 'Escape') {
-      if (ui.fxPanel && !ui.fxPanel.hidden) closeFx();
+      if (ui.shopPanel && !ui.shopPanel.hidden) closeShop();
+      else if (ui.fxPanel && !ui.fxPanel.hidden) closeFx();
       else if (!ui.inv.hidden) closeInv();
       else if (!ui.dialog.hidden) closeDialog();
     }
@@ -2829,7 +4025,18 @@ function showTitle() {
 function startGame(cont) {
   if (cont) {
     const loaded = loadSave();
-    save = loaded ? { ...defaultSave(), ...loaded, quests: { ...defaultSave().quests, ...(loaded.quests || {}) } } : defaultSave();
+    save = loaded ? {
+      ...defaultSave(),
+      ...loaded,
+      quests: { ...defaultSave().quests, ...(loaded.quests || {}) },
+      shop: { ...defaultSave().shop, ...(loaded.shop || {}) },
+      letters: { ...defaultSave().letters, ...(loaded.letters || {}) },
+      ayamCaught: { ...(loaded.ayamCaught || {}) },
+    } : defaultSave();
+    if (save.won && (save.quests.ayam !== 'done' || save.quests.surat !== 'done')) {
+      save.won = false;
+      save.migratedVillage = true;
+    }
   } else {
     save = defaultSave();
     writeSave(save);
@@ -2876,6 +4083,10 @@ function startGame(cont) {
     if (s.userData.alive) s.scale.set(1, 1, 1);
   }
   applyPuzzleVisual();
+  syncAnimalsFromSave();
+  applyPlayerGear();
+  closeShop();
+  closeFx();
 
   world.playing = true;
   world.blocked = false;
@@ -2895,6 +4106,27 @@ function startGame(cont) {
   if (save.migratedFromV1) {
     showToast('Wilayah baru terbuka di utara: Sawah dan Gunung.');
     persist({ migratedFromV1: false });
+  } else if (save.migratedVillage) {
+    showToast('Desa sudah lebih luas. Ada pasar, misi baru, dan toko.');
+    persist({ migratedVillage: false });
+  }
+  drawMinimap();
+}
+
+function syncAnimalsFromSave() {
+  if (!world.animals || !world.animals.ayam) return;
+  let i = 0;
+  for (const a of world.animals.ayam) {
+    const should = !a.userData.quest || !!(save.ayamCaught && save.ayamCaught[a.userData.id]);
+    a.userData.caught = should;
+    a.userData.state = should ? 'pen' : 'wander';
+    if (should) {
+      a.position.set(-9.3 + (i % 3) * 0.55, 0, 3.4 + (i % 2) * 0.55);
+      i++;
+    } else {
+      a.position.set(a.userData.homeX, 0, a.userData.homeZ);
+      a.userData.heading = Math.random() * Math.PI * 2;
+    }
   }
 }
 
@@ -3005,6 +4237,38 @@ function boot() {
       setVibrate,
       onPlayerHit,
       onQuestComplete,
+      addCoins(n) { persist({ coins: save.coins + n }); },
+      buyItem,
+      openShop,
+      closeShop,
+      captureAyam: captureAllAyam,
+      deliverLetter,
+      deliverAllLetters,
+      setSprint(v) { world.sprintHeld = !!v; },
+      overviewVillage(on) { world.overview = on !== false; if (!world.overview) snapCamera(); },
+      getVillage() {
+        return {
+          shop: { ...save.shop },
+          letters: { ...save.letters },
+          ayam: ayamCaughtCount(),
+          stamina: world.stamina,
+          sprinting: world.sprinting,
+          hp: save.hp,
+          maxHp: save.maxHp,
+          speed: (save.shop && save.shop.sepatu ? 1.22 : 1),
+          animals: {
+            ayam: world.animals.ayam.length,
+            grazers: world.animals.grazers.length,
+            cats: world.animals.cats.length,
+            birds: world.animals.birds.length,
+            fish: world.animals.fish.length,
+            flutters: world.animals.flutters.length,
+            fireflies: world.animals.fireflies ? world.animals.fireflies.count : 0,
+          },
+          shopOpen: !!(ui.shopPanel && !ui.shopPanel.hidden),
+          minimap: !!(ui.minimap && !ui.hud.hidden),
+        };
+      },
     };
   }
   requestAnimationFrame(tick);
